@@ -7,6 +7,8 @@ import { BackgroundLogin } from "../src/auth/background-login.ts";
 import { SCOPES, VERSION } from "../src/config.ts";
 import { createServer } from "../src/server.ts";
 import { NotLoggedInError, WhoopApiError, type WhoopClient } from "../src/whoop/client.ts";
+import { addDays, todayLocal } from "../src/whoop/data.ts";
+import { cycle, recovery, sleep, workout } from "./fixtures.ts";
 
 type Responses = Record<string, unknown>;
 
@@ -72,10 +74,25 @@ async function writeTokenFile(tokens: Record<string, unknown>) {
 }
 
 describe("tools/list", () => {
-  test("exposes whoop_status and whoop_profile as read-only and whoop_login as a non-destructive write", async () => {
+  test("exposes every tool but whoop_login as read-only and whoop_login as a non-destructive write", async () => {
     const { client } = await connect();
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["whoop_login", "whoop_profile", "whoop_status"]);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      "whoop_baselines",
+      "whoop_compare_periods",
+      "whoop_correlate",
+      "whoop_daily_summaries",
+      "whoop_get_record",
+      "whoop_login",
+      "whoop_profile",
+      "whoop_sleep",
+      "whoop_status",
+      "whoop_today",
+      "whoop_training_load",
+      "whoop_trends",
+      "whoop_workouts",
+    ]);
+    for (const t of tools.filter((t) => t.name !== "whoop_login")) expect(t.annotations?.readOnlyHint).toBe(true);
     for (const t of tools) expect(t.annotations?.idempotentHint).toBe(true);
     const byName = (n: string) => tools.find((t) => t.name === n)?.annotations;
     expect(byName("whoop_status")?.readOnlyHint).toBe(true);
@@ -340,5 +357,77 @@ describe("whoop_login", () => {
     expect(text(result)).toMatch(/Client ID/);
     const status = await client.callTool({ name: "whoop_status", arguments: {} });
     expect(status.structuredContent).toMatchObject({ login: { state: "pending", authorize_url: SETUP_URL } });
+  });
+});
+
+describe("data tools", () => {
+  const today = todayLocal();
+  const yesterday = addDays(today, -1);
+  const data: Responses = {
+    "/v2/cycle": {
+      records: [
+        cycle(1, `${addDays(today, -2)}T23:30:00Z`, `${today}T00:00:00Z`),
+        cycle(2, `${today}T00:00:00Z`, undefined),
+      ],
+    },
+    "/v2/recovery": { records: [recovery(1, "s1", 70), recovery(2, "s2", 25)] },
+    "/v2/activity/sleep": {
+      records: [
+        sleep("s1", 1, `${addDays(today, -2)}T23:30:00Z`, `${yesterday}T07:30:00Z`),
+        sleep("s2", 2, `${today}T00:00:00Z`, `${today}T00:01:00Z`),
+      ],
+    },
+    "/v2/activity/workout": {
+      records: [workout("w1", `${yesterday}T18:00:00Z`, `${yesterday}T19:00:00Z`)],
+    },
+  };
+
+  test("whoop_today joins recovery, sleep, the open day and workouts", async () => {
+    const { client } = await connect(data);
+    const result = await client.callTool({ name: "whoop_today", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      date: today,
+      recovery: { recovery_pct: 25, zone: "red" },
+      day: { in_progress: true, strain: 10 },
+      disclaimer: "Not medical advice.",
+    });
+  });
+
+  test("whoop_daily_summaries returns a row per day", async () => {
+    const { client } = await connect(data);
+    const result = await client.callTool({ name: "whoop_daily_summaries", arguments: { days: 2 } });
+    expect(result.structuredContent).toMatchObject({
+      days: [{ date: yesterday, recovery_pct: 70, workouts: 1, workout_min: 60 }, { date: today }],
+    });
+  });
+
+  test("rejects a reversed date range with an actionable error", async () => {
+    const { client, stub } = await connect(data);
+    const result = await client.callTool({
+      name: "whoop_daily_summaries",
+      arguments: { start_date: today, end_date: yesterday },
+    });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("must be on or before end_date");
+    expect(stub.calls).toEqual([]);
+  });
+
+  test("whoop_workouts filters by sport and totals per sport", async () => {
+    const { client } = await connect(data);
+    const hit = await client.callTool({ name: "whoop_workouts", arguments: { days: 3, sport: "walk" } });
+    expect(hit.structuredContent).toMatchObject({ totals_by_sport: { walking: { count: 1, minutes: 60 } } });
+    const miss = await client.callTool({ name: "whoop_workouts", arguments: { days: 3, sport: "rowing" } });
+    expect(miss.structuredContent).toMatchObject({ workouts: [] });
+  });
+
+  test("whoop_get_record fetches one record by type and id", async () => {
+    const { client, stub } = await connect({ "/v2/cycle/2/recovery": recovery(2, "s2", 25) });
+    const result = await client.callTool({
+      name: "whoop_get_record",
+      arguments: { type: "recovery_for_cycle", id: "2" },
+    });
+    expect(result.structuredContent).toMatchObject({ shaped: { recovery_pct: 25 } });
+    expect(stub.calls).toEqual(["/v2/cycle/2/recovery"]);
   });
 });

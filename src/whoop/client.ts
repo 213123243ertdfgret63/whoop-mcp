@@ -30,6 +30,14 @@ export interface ResponseMeta {
 }
 
 const REFRESH_SKEW_MS = 60_000;
+const MAX_RATE_LIMIT_RETRIES = 2;
+const MAX_RETRY_DELAY_MS = 30_000;
+
+/** How long a 429 asks us to wait: Retry-After or X-RateLimit-Reset (seconds), capped; 2s if neither. */
+export function retryDelayMs(res: Response): number {
+  const seconds = Number(res.headers.get("retry-after") ?? res.headers.get("x-ratelimit-reset"));
+  return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, MAX_RETRY_DELAY_MS) : 2000;
+}
 
 /**
  * M0 client: bearer auth, refresh-before-expiry, and one 401 retry that first re-reads the
@@ -54,6 +62,10 @@ export class WhoopClient {
       const latest = await readTokens();
       if (!latest) throw new NotLoggedInError(); // logged out elsewhere: don't resurrect the session
       tokens = latest.access_token !== tokens.access_token ? latest : await this.refresh(latest);
+      res = await this.send(url, tokens.access_token);
+    }
+    for (let attempt = 0; res.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES; attempt++) {
+      await Bun.sleep(retryDelayMs(res));
       res = await this.send(url, tokens.access_token);
     }
     const text = await res.text();

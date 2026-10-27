@@ -85,11 +85,25 @@ You can also revoke the app's access, or delete the app, in the [WHOOP developer
 
 ## Tools
 
-| Tool            | What it does                                                                                                                  |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `whoop_status`  | Connection state: app credentials, login progress, granted scopes, token expiry and server version. Makes no WHOOP API calls. |
-| `whoop_login`   | Connects your account in the browser (setup page first if needed). `reconfigure: true` re-enters the app credentials.         |
-| `whoop_profile` | Your name, height, weight and max heart rate.                                                                                 |
+Ask Claude things like "how am I today, should I train hard?", "how was my week?", "am I overreaching?" or "does late training hurt my sleep?". It picks the tools itself.
+
+| Tool                    | What it does                                                                                                                                                                            |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `whoop_today`           | One day's snapshot: last night's sleep, the morning's recovery (with its green, yellow or red zone), strain, kcal and steps so far, workouts, and each key number vs. the last 30 days. |
+| `whoop_daily_summaries` | One row per day over a range (up to 90 days): recovery, HRV, resting HR, sleep, strain, kcal, steps and workouts, plus averages.                                                        |
+| `whoop_sleep`           | Every sleep and nap in a range: bed and wake times, stages, disturbances, sleep needed and why, performance, efficiency, consistency.                                                   |
+| `whoop_workouts`        | Every workout in a range, optionally for one sport: duration, strain, heart rate, kcal, distance, minutes per heart-rate zone, plus totals per sport.                                   |
+| `whoop_trends`          | How one metric moved over N days: statistics, slope per week, 7-day rolling average, and where the latest value sits.                                                                   |
+| `whoop_baselines`       | Your personal normal range per metric, and how a given day compares (z-score, percentile).                                                                                              |
+| `whoop_compare_periods` | Averages for two date ranges side by side, with the change (e.g. this week vs. last week).                                                                                              |
+| `whoop_training_load`   | Acute (7-day) vs. chronic (28-day) strain and their ratio, 7-day sleep debt, average recovery and minutes per heart-rate zone.                                                          |
+| `whoop_correlate`       | Correlation between two metrics, optionally a few days apart (e.g. strain vs. next-day recovery).                                                                                       |
+| `whoop_get_record`      | One cycle, sleep, workout or recovery by ID, with the raw WHOOP record.                                                                                                                 |
+| `whoop_profile`         | Your name, height, weight and max heart rate.                                                                                                                                           |
+| `whoop_status`          | Connection state: app credentials, login progress, granted scopes, token expiry and server version. Makes no WHOOP API calls.                                                           |
+| `whoop_login`           | Connects your account in the browser (setup page first if needed). `reconfigure: true` re-enters the app credentials.                                                                   |
+
+Dates are your local dates, and a WHOOP day runs from falling asleep the night before. Results include a `data_quality` section that says which days are missing, still being scored or calibrating. Nothing here is medical advice.
 
 ## Run from source
 

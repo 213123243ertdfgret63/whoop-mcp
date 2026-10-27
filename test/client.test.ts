@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { OAuthHttpError } from "../src/auth/oauth.ts";
 import { readTokens, type StoredTokens, writeTokens } from "../src/auth/store.ts";
 import { type ClientCredentials, WHOOP } from "../src/config.ts";
-import { NotLoggedInError, WhoopApiError, WhoopClient } from "../src/whoop/client.ts";
+import { NotLoggedInError, retryDelayMs, WhoopApiError, WhoopClient } from "../src/whoop/client.ts";
 
 const CREDS: ClientCredentials = {
   clientId: "test-client-id",
@@ -359,5 +359,31 @@ describe("WhoopClient errors and metadata", () => {
     await c.get("/v2/user/profile/basic");
     await c.get("/v2/user/profile/basic");
     expect(c.lastMeta).toEqual({ traceId: undefined, rateLimit: {} });
+  });
+});
+
+describe("WhoopClient 429 handling", () => {
+  test("waits for Retry-After and retries a rate-limited request", async () => {
+    await writeTokens(tokens());
+    let calls = 0;
+    onApi = () => (++calls === 1 ? json({}, { status: 429, headers: { "Retry-After": "0.01" } }) : json({ ok: 1 }));
+    expect(await client().get<{ ok: number }>("/v2/cycle")).toEqual({ ok: 1 });
+    expect(calls).toBe(2);
+  });
+
+  test("gives up after two retries with a WhoopApiError", async () => {
+    await writeTokens(tokens());
+    onApi = () => json({}, { status: 429, headers: { "X-RateLimit-Reset": "0.01" } });
+    await expect(client().get("/v2/cycle")).rejects.toBeInstanceOf(WhoopApiError);
+    expect(apiCalls).toHaveLength(3);
+  });
+});
+
+describe("retryDelayMs", () => {
+  test("uses Retry-After, then X-RateLimit-Reset, capped at 30s, else 2s", () => {
+    expect(retryDelayMs(new Response(null, { headers: { "Retry-After": "5" } }))).toBe(5000);
+    expect(retryDelayMs(new Response(null, { headers: { "X-RateLimit-Reset": "12" } }))).toBe(12_000);
+    expect(retryDelayMs(new Response(null, { headers: { "Retry-After": "600" } }))).toBe(30_000);
+    expect(retryDelayMs(new Response(null))).toBe(2000);
   });
 });

@@ -21,7 +21,8 @@ async function connect(command: string[], options?: ClientOptions) {
   const transport = new StdioClientTransport({
     command: command[0]!,
     args: command.slice(1),
-    env: { PATH: process.env.PATH ?? "", WHOOP_MCP_HOME: home },
+    // The file store keeps the test away from the real keychain, where a prompt would hang it.
+    env: { PATH: process.env.PATH ?? "", WHOOP_MCP_HOME: home, WHOOP_MCP_CREDENTIAL_STORE: "file" },
     stderr: "pipe",
   });
   const client = new Client({ name: "smoke-test", version: "0.0.0" }, options);
@@ -48,7 +49,8 @@ for (const [label, options, expectedVersion] of eras) {
       try {
         expect(negotiated(client)).toBe(expectedVersion);
         const { tools } = await client.listTools();
-        expect(tools.map((t) => t.name).sort()).toEqual(["whoop_login", "whoop_profile", "whoop_status"]);
+        expect(tools.map((t) => t.name)).toContain("whoop_today");
+        expect(tools.map((t) => t.name)).toContain("whoop_status");
         for (const t of tools) expect(t.annotations?.readOnlyHint).toBe(t.name !== "whoop_login");
       } finally {
         await client.close();
@@ -107,7 +109,7 @@ test.skipIf(!binary)("compiled binary serves stdio", async () => {
   const client = await connect([binary!]);
   try {
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(3);
+    expect(tools.map((t) => t.name)).toContain("whoop_today");
   } finally {
     await client.close();
   }

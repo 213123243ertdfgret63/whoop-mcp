@@ -4,23 +4,18 @@ import { BackgroundLogin } from "./auth/background-login.ts";
 import { resolveClientCredentials } from "./auth/credentials.ts";
 import { readTokens, tokenPath } from "./auth/store.ts";
 import { SCOPES, VERSION } from "./config.ts";
-import { NotLoggedInError, WhoopApiError, WhoopClient } from "./whoop/client.ts";
+import { DISCLAIMER, errorResult, jsonResult, READ_ONLY } from "./tools/common.ts";
+import { registerDataTools } from "./tools/data-tools.ts";
+import { WhoopClient } from "./whoop/client.ts";
 
-const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: true } as const;
-const DISCLAIMER = "Not medical advice.";
-
-function errorResult(err: unknown) {
-  const message =
-    err instanceof NotLoggedInError || err instanceof WhoopApiError || err instanceof Error ? err.message : String(err);
-  return { isError: true, content: [{ type: "text" as const, text: message }] };
-}
-
-function jsonResult<T extends Record<string, unknown>>(data: T, summary: string) {
-  return {
-    content: [{ type: "text" as const, text: `${summary}\n\n${JSON.stringify(data, null, 2)}` }],
-    structuredContent: data,
-  };
-}
+const INSTRUCTIONS = `WHOOP data for the user's own account: recovery, HRV, resting heart rate, sleep, strain, steps and workouts.
+Useful for acting as the user's personal trainer or coach:
+- "How am I today?", readiness, whether to train hard: whoop_today.
+- Weekly check-ins and patterns: whoop_daily_summaries, whoop_compare_periods.
+- Programming, deloads, overreaching: whoop_training_load (acute:chronic strain), whoop_trends, whoop_baselines.
+- Sleep coaching: whoop_sleep. Training history: whoop_workouts. What drives what: whoop_correlate.
+Judge numbers against the user's own baselines (whoop_baselines, or vs_last_30_days in whoop_today) rather than population norms, and say when data is missing, pending or calibrating. Dates are the user's local dates; a day runs from falling asleep the night before. This is not medical advice: suggest a professional for symptoms, injuries or anything clinical.
+If a tool says the user is not logged in, call whoop_login.`;
 
 /** Where the WHOOP app credentials come from, or "missing" (never throws). */
 async function credentialSource(): Promise<"env" | "keychain" | "file" | "missing"> {
@@ -32,7 +27,10 @@ async function credentialSource(): Promise<"env" | "keychain" | "file" | "missin
 }
 
 export function createServer(client = new WhoopClient(), loginFlow = new BackgroundLogin()): McpServer {
-  const server = new McpServer({ name: "whoop-mcp", version: VERSION }, { capabilities: { tools: {} } });
+  const server = new McpServer(
+    { name: "whoop-mcp", version: VERSION },
+    { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
+  );
 
   server.registerTool(
     "whoop_status",
@@ -168,5 +166,6 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
     },
   );
 
+  registerDataTools(server, client);
   return server;
 }
