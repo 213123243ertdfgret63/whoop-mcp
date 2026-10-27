@@ -74,6 +74,14 @@ for (const shell of SHELLS) {
       expect(desktop.mcpServers.whoop).toEqual({ command: installedBin(), args: [] });
     }, 30_000);
 
+    test("warns to quit the Claude desktop app when it's running (it would overwrite its config)", async () => {
+      const r = await run(shell, "install.sh", [], { WHOOP_MCP_ASSUME_DESKTOP_RUNNING: "1" });
+      expect(r.exitCode).toBe(0);
+      const out = r.stdout.toString();
+      expect(out).toContain("Claude Desktop is running");
+      expect(out).toContain(`"${installedBin()}" claude add`);
+    }, 30_000);
+
     test("running install again updates in place", async () => {
       expect((await run(shell, "install.sh")).exitCode).toBe(0);
       expect((await run(shell, "install.sh")).exitCode).toBe(0);

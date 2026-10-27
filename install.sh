@@ -91,9 +91,28 @@ fi
 
 "$bin" claude add --command "$bin" || fail "couldn't add whoop to Claude (see above)"
 
+# The Claude desktop app keeps claude_desktop_config.json in memory (it also holds its preferences) and writes
+# it back on quit, dropping entries added while it was running. Claude Code's registration is not affected.
+desktop_running=0
+if [ "$os" = darwin ] && ps -axo comm= 2>/dev/null | grep -q '/Claude.app/Contents/MacOS/Claude$'; then
+  desktop_running=1
+fi
+[ "${WHOOP_MCP_ASSUME_DESKTOP_RUNNING:-}" = 1 ] && desktop_running=1
+if [ "$desktop_running" = 1 ]; then
+  cat <<EOF
+
+Claude Desktop is running, and it may overwrite its config when it quits, losing the entry just added.
+To make sure Claude Desktop keeps it:
+  1. Quit Claude completely (Cmd+Q, not just closing the window)
+  2. Run: "$bin" claude add
+  3. Open Claude again
+(Claude Code is already set up: just start a new session.)
+EOF
+fi
+
 cat <<EOF
 
-Done. Restart Claude (or reconnect MCP servers), then ask Claude to "connect WHOOP".
+Done. Restart Claude (and start a new session in Claude Code), then ask Claude to "connect WHOOP".
 It opens a page in your browser that walks you through creating your WHOOP app
 and approving access.
 
