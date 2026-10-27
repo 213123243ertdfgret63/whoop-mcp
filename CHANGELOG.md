@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.0 (2026-10-27)
+
+- Add WHOOP data tools for coaching (7e3a183)
+- Explain every WHOOP app field on the setup page (98046a7)
+- Make the fake Claude process visible to ps on Linux in installer tests (8aa0eaa)
+- Offer to restart Claude Desktop from the installer and uninstaller (e8af76c)
+- Warn when the Claude desktop app is running during install (0e2c2d4)
+- Add roadmap note on a remote mode for claude.ai web and mobile (5496fd6)
+
 ## v0.1.0 (2026-10-27)
 
 - Switch to MCP-only: one-line install/uninstall and browser setup (62cc751)
