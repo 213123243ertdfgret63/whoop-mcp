@@ -8,7 +8,7 @@ Not affiliated with or endorsed by WHOOP. Nothing it returns is medical advice.
 
 ## Install
 
-On macOS or Linux, quit the Claude desktop app first (Cmd+Q, not just closing the window), then run:
+On macOS or Linux, run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/213123243ertdfgret63/whoop-mcp/main/install.sh | sh
@@ -20,7 +20,12 @@ The script:
 2. Installs it to `~/.whoop-mcp/bin/whoop-mcp`.
 3. Adds a `whoop` MCP server to **Claude Code** (via `claude mcp add --scope user`, also used by the desktop app's Code tab) and to **Claude Desktop** (`claude_desktop_config.json`), whichever you have. Your other settings and servers are left as they are.
 
-Then open Claude again (in Claude Code, start a new session). The desktop app rewrites its config file when it quits, so an entry added while it was running can be lost. If that happens, quit Claude and run `~/.whoop-mcp/bin/whoop-mcp claude add`.
+If the Claude desktop app is running, the installer asks **"Restart Claude now? [y/N]"**. The app rewrites its config when it quits, so it has to restart to keep the new entry:
+
+- **Yes:** Claude quits (confirm if it asks), whoop is added once Claude has closed, and Claude reopens. If Claude doesn't quit, nothing is changed and the installer says what to run instead.
+- **No:** quit Claude yourself (Cmd+Q), run `~/.whoop-mcp/bin/whoop-mcp claude add`, and reopen it.
+
+In Claude Code, start a new session to pick up the server. `WHOOP_MCP_RESTART_CLAUDE=yes` or `=no` answers the question ahead of time. The uninstaller asks the same question.
 
 Options, as environment variables before `sh`:
 
