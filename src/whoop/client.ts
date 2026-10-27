@@ -48,7 +48,8 @@ export class WhoopClient {
     let res = await this.send(url, tokens.access_token);
     if (res.status === 401) {
       const latest = await readTokens();
-      tokens = latest && latest.access_token !== tokens.access_token ? latest : await this.refresh(latest ?? tokens);
+      if (!latest) throw new NotLoggedInError(); // logged out elsewhere: don't resurrect the session
+      tokens = latest.access_token !== tokens.access_token ? latest : await this.refresh(latest);
       res = await this.send(url, tokens.access_token);
     }
     const text = await res.text();

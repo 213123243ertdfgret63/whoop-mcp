@@ -23,10 +23,11 @@ export interface LoginResult {
   callbackParams: Record<string, string>;
 }
 
+// `body` can carry attacker-controlled query params (error_description), so everything is escaped.
 const page = (title: string, body: string) =>
   new Response(
-    `<!doctype html><meta charset="utf-8"><title>${title}</title>` +
-      `<body style="font:16px system-ui;max-width:32rem;margin:4rem auto"><h1>${title}</h1><p>${body}</p></body>`,
+    `<!doctype html><meta charset="utf-8"><title>${Bun.escapeHTML(title)}</title>` +
+      `<body style="font:16px system-ui;max-width:32rem;margin:4rem auto"><h1>${Bun.escapeHTML(title)}</h1><p>${Bun.escapeHTML(body)}</p></body>`,
     { headers: { "Content-Type": "text/html; charset=utf-8" } },
   );
 

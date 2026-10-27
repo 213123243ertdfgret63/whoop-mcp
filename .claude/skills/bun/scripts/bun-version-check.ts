@@ -73,11 +73,11 @@ function installed() {
                   ? "scoop"
                   : "unknown";
   return {
-    version: pathVersion ?? Bun.version,
+    version: pathVersion || Bun.version,
     revision,
     path: binPath,
     method,
-    canary: /canary/.test(revision ?? pathVersion ?? ""),
+    canary: /canary/.test(revision || pathVersion || ""),
   };
 }
 

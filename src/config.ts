@@ -49,5 +49,5 @@ export function loadClientCredentials(env = process.env): ClientCredentials {
 
 export function configDir(env = process.env): string {
   if (env.WHOOP_MCP_HOME) return env.WHOOP_MCP_HOME;
-  return join(env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "whoop-mcp");
+  return join(env.XDG_CONFIG_HOME || join(homedir(), ".config"), "whoop-mcp");
 }

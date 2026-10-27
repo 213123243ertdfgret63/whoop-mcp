@@ -71,7 +71,9 @@ async function postToken(
     Accept: "application/json",
   };
   if (auth === "basic") {
-    headers.Authorization = `Basic ${btoa(`${encodeURIComponent(creds.clientId)}:${encodeURIComponent(creds.clientSecret)}`)}`;
+    // RFC 6749 §2.3.1: form-encode id and secret before Basic-encoding them.
+    const form = (v: string) => new URLSearchParams({ v }).toString().slice(2);
+    headers.Authorization = `Basic ${btoa(`${form(creds.clientId)}:${form(creds.clientSecret)}`)}`;
   } else {
     body.set("client_id", creds.clientId);
     body.set("client_secret", creds.clientSecret);
