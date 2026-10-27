@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
-import { SCOPES, loadClientCredentials } from "./config.ts";
 import { login } from "./auth/login.ts";
 import { toStored } from "./auth/oauth.ts";
 import { deleteTokens, readTokens, tokenPath, writeTokens } from "./auth/store.ts";
+import { loadClientCredentials, SCOPES } from "./config.ts";
 import { createServer } from "./server.ts";
 
 const [command = "serve", ...rest] = process.argv.slice(2);

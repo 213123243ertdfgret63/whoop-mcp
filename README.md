@@ -37,11 +37,15 @@ For Claude Desktop, add the following to `claude_desktop_config.json`. Use absol
 
 ## Development
 
-| Command | What it does |
-|---|---|
-| `bun test` | Stdio smoke tests covering both MCP protocol eras (2026-07-28 and 2025-11-25) |
-| `bun run typecheck` | `tsc --noEmit` |
-| `bun run inspect` | Opens MCP Inspector against the server |
-| `bun run gen:types` | Regenerates `src/whoop/openapi.d.ts` from WHOOP's OpenAPI spec |
-| `bun run build` | Builds a single-file binary at `dist/whoop-mcp` |
-| `bun scripts/m0-probe.ts <public\|login\|refresh\|api>` | The M0 verification probes (see `docs/verification.md`) |
+| Command                                                 | What it does                                                                                      |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `bun test`                                              | Test suite (includes stdio smoke tests covering both MCP protocol eras)                           |
+| `bun run typecheck`                                     | `tsc --noEmit`                                                                                    |
+| `bun run lint` / `bun run format`                       | Biome check / Biome check with fixes applied                                                      |
+| `bun run inspect`                                       | Opens MCP Inspector against the server                                                            |
+| `bun run spec:update`                                   | Refreshes `openapi/whoop.yaml` from WHOOP's published spec (review with `git diff openapi/`)      |
+| `bun run gen:types`                                     | Generates `src/whoop/openapi.d.ts` from `openapi/whoop.yaml`; runs automatically on `bun install` |
+| `bun run build`                                         | Builds a single-file binary at `dist/whoop-mcp`                                                   |
+| `bun scripts/m0-probe.ts <public\|login\|refresh\|api>` | The M0 verification probes (see `docs/verification.md`)                                           |
+
+A Husky pre-commit hook runs Biome on staged files, applying formatting and safe fixes; lint errors it can't fix block the commit.

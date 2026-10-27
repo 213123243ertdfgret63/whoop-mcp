@@ -15,5 +15,5 @@
     "noImplicitOverride": true,
     "types": ["bun"]
   },
-  "include": ["src", "scripts", "test"]
+  "include": ["src", "scripts", "test", ".claude/skills/*/scripts"]
 }

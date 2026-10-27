@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import { SCOPES, VERSION } from "./config.ts";
 import { readTokens, tokenPath } from "./auth/store.ts";
+import { SCOPES, VERSION } from "./config.ts";
 import { NotLoggedInError, WhoopApiError, WhoopClient } from "./whoop/client.ts";
 
 const READ_ONLY = { readOnlyHint: true, idempotentHint: true, openWorldHint: true } as const;
@@ -14,7 +14,10 @@ function errorResult(err: unknown) {
 }
 
 function jsonResult<T extends Record<string, unknown>>(data: T, summary: string) {
-  return { content: [{ type: "text" as const, text: `${summary}\n\n${JSON.stringify(data, null, 2)}` }], structuredContent: data };
+  return {
+    content: [{ type: "text" as const, text: `${summary}\n\n${JSON.stringify(data, null, 2)}` }],
+    structuredContent: data,
+  };
 }
 
 export function createServer(client = new WhoopClient()): McpServer {
@@ -49,7 +52,10 @@ export function createServer(client = new WhoopClient()): McpServer {
         has_refresh_token: Boolean(tokens?.refresh_token),
         server_version: VERSION,
       };
-      return jsonResult(data, data.logged_in ? "WHOOP is connected." : "Not logged in: run `whoop-mcp login` in a terminal.");
+      return jsonResult(
+        data,
+        data.logged_in ? "WHOOP is connected." : "Not logged in: run `whoop-mcp login` in a terminal.",
+      );
     },
   );
 
@@ -66,8 +72,12 @@ export function createServer(client = new WhoopClient()): McpServer {
     async ({ include_email }) => {
       try {
         const [profile, body] = await Promise.all([
-          client.get<{ user_id: number; email: string; first_name: string; last_name: string }>("/v2/user/profile/basic"),
-          client.get<{ height_meter: number; weight_kilogram: number; max_heart_rate: number }>("/v2/user/measurement/body"),
+          client.get<{ user_id: number; email: string; first_name: string; last_name: string }>(
+            "/v2/user/profile/basic",
+          ),
+          client.get<{ height_meter: number; weight_kilogram: number; max_heart_rate: number }>(
+            "/v2/user/measurement/body",
+          ),
         ]);
         const data = {
           name: `${profile.first_name} ${profile.last_name}`.trim(),

@@ -2,10 +2,10 @@ import type { ClientCredentials } from "../config.ts";
 import { log } from "../log.ts";
 import {
   buildAuthorizeUrl,
+  type ClientAuthMethod,
   exchangeCode,
   pkcePair,
   randomState,
-  type ClientAuthMethod,
   type TokenResponse,
 } from "./oauth.ts";
 
@@ -43,7 +43,8 @@ export async function login(creds: ClientCredentials, opts: LoginOptions = {}): 
 
   const deferred = Promise.withResolvers<{ code: string; params: Record<string, string> }>();
   // Settle on the next tick so the callback page is written before the caller can exit the process.
-  const resolve = (value: { code: string; params: Record<string, string> }) => setTimeout(() => deferred.resolve(value), 50);
+  const resolve = (value: { code: string; params: Record<string, string> }) =>
+    setTimeout(() => deferred.resolve(value), 50);
   const reject = (err: Error) => setTimeout(() => deferred.reject(err), 50);
 
   const fetchHandler = (req: Request): Response => {
@@ -51,7 +52,11 @@ export async function login(creds: ClientCredentials, opts: LoginOptions = {}): 
     if (url.pathname !== redirect.pathname) return new Response("Not found", { status: 404 });
     const params = Object.fromEntries(url.searchParams);
     if (params.error) {
-      reject(new Error(`Authorization failed: ${params.error}${params.error_description ? ` — ${params.error_description}` : ""}`));
+      reject(
+        new Error(
+          `Authorization failed: ${params.error}${params.error_description ? ` — ${params.error_description}` : ""}`,
+        ),
+      );
       return page("Authorization failed", `${params.error}: ${params.error_description ?? ""}`);
     }
     if (params.state !== state) {
@@ -79,9 +84,12 @@ export async function login(creds: ClientCredentials, opts: LoginOptions = {}): 
   });
   if (servers.length === 0) throw new Error(`Could not start the callback server on port ${port}.`);
 
-  const timeout = setTimeout(() => deferred.reject(new Error("Timed out waiting for the WHOOP login callback.")), opts.timeoutMs ?? 5 * 60_000);
+  const timeout = setTimeout(
+    () => deferred.reject(new Error("Timed out waiting for the WHOOP login callback.")),
+    opts.timeoutMs ?? 5 * 60_000,
+  );
 
-  log("Open this URL to authorize WHOOP access:\n\n  " + authorizeUrl + "\n");
+  log(`Open this URL to authorize WHOOP access:\n\n  ${authorizeUrl}\n`);
   if (opts.openBrowser ?? true) {
     const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
     try {

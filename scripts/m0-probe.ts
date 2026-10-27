@@ -11,10 +11,16 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { WHOOP, loadClientCredentials } from "../src/config.ts";
 import { login } from "../src/auth/login.ts";
-import { OAuthHttpError, refreshTokens, toStored, type ClientAuthMethod, type TokenResponse } from "../src/auth/oauth.ts";
+import {
+  type ClientAuthMethod,
+  OAuthHttpError,
+  refreshTokens,
+  type TokenResponse,
+  toStored,
+} from "../src/auth/oauth.ts";
 import { readTokens, writeTokens } from "../src/auth/store.ts";
+import { loadClientCredentials, WHOOP } from "../src/config.ts";
 
 const RESULTS = join(import.meta.dir, "..", "docs", "m0-results.json");
 
@@ -35,7 +41,7 @@ async function record(probe: string, result: Record<string, unknown>): Promise<v
   const entry = { probe, at: new Date().toISOString(), ...result };
   console.log(JSON.stringify(entry, null, 2));
   await mkdir(join(import.meta.dir, "..", "docs"), { recursive: true });
-  await appendFile(RESULTS, JSON.stringify(entry) + "\n");
+  await appendFile(RESULTS, `${JSON.stringify(entry)}\n`);
 }
 
 /** Shape of a token response with every secret removed. */
@@ -52,7 +58,9 @@ function describeTokens(t: TokenResponse) {
 }
 
 async function profileStatus(accessToken: string): Promise<number> {
-  const res = await fetch(`${WHOOP.apiBase}/v2/user/profile/basic`, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const res = await fetch(`${WHOOP.apiBase}/v2/user/profile/basic`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
   await res.body?.cancel();
   return res.status;
 }
@@ -81,7 +89,11 @@ async function probePublic(): Promise<void> {
   });
 
   const res = await fetch(WHOOP.openapiUrl);
-  const spec = (await res.json()) as { openapi: string; info: { version: string }; paths: Record<string, Record<string, { security?: unknown }>> };
+  const spec = (await res.json()) as {
+    openapi: string;
+    info: { version: string };
+    paths: Record<string, Record<string, { security?: unknown }>>;
+  };
   const ops = Object.entries(spec.paths).flatMap(([path, methods]) =>
     Object.entries(methods).map(([method, op]) => ({ method: method.toUpperCase(), path, security: op.security })),
   );
@@ -155,7 +167,9 @@ async function probeRefresh(): Promise<void> {
     if (reuse.ok) await writeTokens(toStored(reuse.tokens, after));
     const latest = await readTokens();
     const follow = await tryRefresh(latest!.refresh_token!, { auth });
-    result.current_refresh_token_after_reuse = follow.ok ? { ok: true } : { ok: false, status: follow.status, body: follow.body };
+    result.current_refresh_token_after_reuse = follow.ok
+      ? { ok: true }
+      : { ok: false, status: follow.status, body: follow.body };
     if (follow.ok) await writeTokens(toStored(follow.tokens, latest));
   }
   await record("refresh", result);
@@ -175,7 +189,11 @@ async function probeApi(): Promise<void> {
     try {
       const json = JSON.parse(body);
       shape = Array.isArray(json.records)
-        ? { record_count: json.records.length, next_token: json.next_token === null ? null : typeof json.next_token, first_record_keys: Object.keys(json.records[0] ?? {}) }
+        ? {
+            record_count: json.records.length,
+            next_token: json.next_token === null ? null : typeof json.next_token,
+            first_record_keys: Object.keys(json.records[0] ?? {}),
+          }
         : { keys: Object.keys(json) };
     } catch {
       shape = { non_json_body: body.slice(0, 200) };
@@ -184,10 +202,19 @@ async function probeApi(): Promise<void> {
   };
 
   const results = [];
-  for (const path of ["/v2/cycle?limit=1", "/v2/recovery?limit=1", "/v2/activity/sleep?limit=1", "/v2/activity/workout?limit=1", "/v2/cycle?limit=26", "/v2/cycle?start=not-a-date"]) {
+  for (const path of [
+    "/v2/cycle?limit=1",
+    "/v2/recovery?limit=1",
+    "/v2/activity/sleep?limit=1",
+    "/v2/activity/workout?limit=1",
+    "/v2/cycle?limit=26",
+    "/v2/cycle?start=not-a-date",
+  ]) {
     results.push(await get(path));
   }
-  const cycles = (await (await fetch(`${WHOOP.apiBase}/v2/cycle?limit=1`, { headers: { Authorization: `Bearer ${tokens.access_token}` } })).json()) as { records: { id: number }[] };
+  const cycles = (await (
+    await fetch(`${WHOOP.apiBase}/v2/cycle?limit=1`, { headers: { Authorization: `Bearer ${tokens.access_token}` } })
+  ).json()) as { records: { id: number }[] };
   const cycleId = cycles.records[0]?.id;
   if (cycleId !== undefined) {
     results.push(await get(`/v2/cycle/${cycleId}/sleep`), await get(`/v2/cycle/${cycleId}/recovery`));
@@ -196,7 +223,12 @@ async function probeApi(): Promise<void> {
   await record("api", { results });
 }
 
-const probes: Record<string, () => Promise<void>> = { public: probePublic, login: probeLogin, refresh: probeRefresh, api: probeApi };
+const probes: Record<string, () => Promise<void>> = {
+  public: probePublic,
+  login: probeLogin,
+  refresh: probeRefresh,
+  api: probeApi,
+};
 const probe = probes[positionals[0] ?? ""];
 if (!probe) {
   console.error(`Usage: bun scripts/m0-probe.ts <${Object.keys(probes).join("|")}> [options]`);

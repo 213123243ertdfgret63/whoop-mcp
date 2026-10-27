@@ -38,7 +38,8 @@ const eras: [label: string, options: ClientOptions, expectedVersion: string][] =
   ["legacy (2025-11-25 initialize)", { supportedProtocolVersions: ["2025-11-25"] }, "2025-11-25"],
 ];
 
-const negotiated = (client: Client) => (client as unknown as { _negotiatedProtocolVersion?: string })._negotiatedProtocolVersion;
+const negotiated = (client: Client) =>
+  (client as unknown as { _negotiatedProtocolVersion?: string })._negotiatedProtocolVersion;
 
 for (const [label, options, expectedVersion] of eras) {
   describe(`stdio server, ${label}`, () => {
@@ -87,7 +88,11 @@ test("whoop_status reads a stored token file", async () => {
   const client = await connect([process.execPath, "run", ENTRY]);
   try {
     const status = await client.callTool({ name: "whoop_status", arguments: {} });
-    const data = status.structuredContent as { logged_in: boolean; missing_scopes: string[]; has_refresh_token: boolean };
+    const data = status.structuredContent as {
+      logged_in: boolean;
+      missing_scopes: string[];
+      has_refresh_token: boolean;
+    };
     expect(data.logged_in).toBe(true);
     expect(data.has_refresh_token).toBe(true);
     expect(data.missing_scopes).toContain("read:sleep");

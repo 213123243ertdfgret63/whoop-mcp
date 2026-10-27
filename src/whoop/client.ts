@@ -1,7 +1,7 @@
-import { WHOOP, loadClientCredentials, type ClientCredentials } from "../config.ts";
-import { log } from "../log.ts";
 import { refreshTokens, toStored } from "../auth/oauth.ts";
-import { readTokens, writeTokens, type StoredTokens } from "../auth/store.ts";
+import { readTokens, type StoredTokens, writeTokens } from "../auth/store.ts";
+import { type ClientCredentials, loadClientCredentials, WHOOP } from "../config.ts";
+import { log } from "../log.ts";
 
 export class NotLoggedInError extends Error {
   override name = "NotLoggedInError";
@@ -48,8 +48,7 @@ export class WhoopClient {
     let res = await this.send(url, tokens.access_token);
     if (res.status === 401) {
       const latest = await readTokens();
-      tokens =
-        latest && latest.access_token !== tokens.access_token ? latest : await this.refresh(latest ?? tokens);
+      tokens = latest && latest.access_token !== tokens.access_token ? latest : await this.refresh(latest ?? tokens);
       res = await this.send(url, tokens.access_token);
     }
     const text = await res.text();

@@ -1,4 +1,4 @@
-import { SCOPES, WHOOP, type ClientCredentials } from "../config.ts";
+import { type ClientCredentials, SCOPES, WHOOP } from "../config.ts";
 import type { StoredTokens } from "./store.ts";
 
 export interface TokenResponse {

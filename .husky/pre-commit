@@ -1,0 +1,3 @@
+# Format, lint and organize imports on staged files; unfixable lint errors block the commit.
+# Afterwards, re-stage whatever Biome fixed (this stages the whole file, including any unstaged hunks in it).
+bunx biome check --write --staged --no-errors-on-unmatched && git update-index --again

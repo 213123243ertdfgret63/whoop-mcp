@@ -1,6 +1,6 @@
 # WHOOP MCP Server (Bun + TypeScript): Build Brief
 
-*Put together from the api, oauth, existing-servers and mcp-bun research reports, with the fact-check corrections applied. Research date: 2026-10-27. Anything marked **UNVERIFIED** still needs to be tested or confirmed.*
+_Put together from the api, oauth, existing-servers and mcp-bun research reports, with the fact-check corrections applied. Research date: 2026-10-27. Anything marked **UNVERIFIED** still needs to be tested or confirmed._
 
 ---
 
@@ -42,34 +42,33 @@
 
 ### Base URLs
 
-| Item | Value |
-|---|---|
-| API base | `https://api.prod.whoop.com/developer` |
-| OAuth authorize | `https://api.prod.whoop.com/oauth/oauth2/auth` |
-| OAuth token (code exchange and refresh) | `https://api.prod.whoop.com/oauth/oauth2/token` |
-| RFC 7009 token revocation (advertised in discovery, not in WHOOP's docs) | `https://api.prod.whoop.com/oauth/oauth2/revoke` |
-| OIDC discovery | `https://api.prod.whoop.com/oauth/.well-known/openid-configuration` (the RFC 8414 path returns 404) |
-| OpenAPI spec | `https://api.prod.whoop.com/developer/doc/openapi.json` (about 76 KB, 22 operations, 34 schemas) |
-| Developer dashboard | `https://developer-dashboard.whoop.com` (sign-in goes through id.whoop.com) |
+| Item                                                                     | Value                                                                                               |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| API base                                                                 | `https://api.prod.whoop.com/developer`                                                              |
+| OAuth authorize                                                          | `https://api.prod.whoop.com/oauth/oauth2/auth`                                                      |
+| OAuth token (code exchange and refresh)                                  | `https://api.prod.whoop.com/oauth/oauth2/token`                                                     |
+| RFC 7009 token revocation (advertised in discovery, not in WHOOP's docs) | `https://api.prod.whoop.com/oauth/oauth2/revoke`                                                    |
+| OIDC discovery                                                           | `https://api.prod.whoop.com/oauth/.well-known/openid-configuration` (the RFC 8414 path returns 404) |
+| OpenAPI spec                                                             | `https://api.prod.whoop.com/developer/doc/openapi.json` (about 76 KB, 22 operations, 34 schemas)    |
+| Developer dashboard                                                      | `https://developer-dashboard.whoop.com` (sign-in goes through id.whoop.com)                         |
 
 ### Endpoints for consumer apps
 
-| Method | Path | Scope | Notes |
-|---|---|---|---|
-| GET | `/v2/user/profile/basic` | read:profile | Returns `user_id`, `email`, `first_name`, `last_name` |
-| GET | `/v2/user/measurement/body` | read:body_measurement | Returns `height_meter`, `weight_kilogram`, `max_heart_rate` |
-| DELETE | `/v2/user/access` | (OAuth) | Revokes the app's access and returns 204. Webhooks stop for that user |
-| GET | `/v2/cycle` | read:cycles | Paginated |
-| GET | `/v2/cycle/{cycleId}` | read:cycles | `cycleId` is an int64 |
-| GET | `/v2/cycle/{cycleId}/sleep` | none in the spec (probably read:sleep, **UNVERIFIED**) | New in v2 |
-| GET | `/v2/cycle/{cycleId}/recovery` | read:recovery | |
-| GET | `/v2/recovery` | read:recovery | Sorted by the related sleep's start time, newest first |
-| GET | `/v2/activity/sleep` | read:sleep | Paginated |
-| GET | `/v2/activity/sleep/{sleepId}` | read:sleep | `sleepId` is a UUID |
-| GET | `/v2/activity/workout` | read:workout | Paginated |
-| GET | `/v2/activity/workout/{workoutId}` | read:workout | `workoutId` is a UUID |
-| GET | `/v1/activity-mapping/{activityV1Id}` | none in the spec | Maps an old ID to `{ v2_activity_id }`. For one-time migration only. Documents only 200, 404 and 500 responses |
-
+| Method | Path                                  | Scope                                                  | Notes                                                                                                          |
+| ------ | ------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| GET    | `/v2/user/profile/basic`              | read:profile                                           | Returns `user_id`, `email`, `first_name`, `last_name`                                                          |
+| GET    | `/v2/user/measurement/body`           | read:body_measurement                                  | Returns `height_meter`, `weight_kilogram`, `max_heart_rate`                                                    |
+| DELETE | `/v2/user/access`                     | (OAuth)                                                | Revokes the app's access and returns 204. Webhooks stop for that user                                          |
+| GET    | `/v2/cycle`                           | read:cycles                                            | Paginated                                                                                                      |
+| GET    | `/v2/cycle/{cycleId}`                 | read:cycles                                            | `cycleId` is an int64                                                                                          |
+| GET    | `/v2/cycle/{cycleId}/sleep`           | none in the spec (probably read:sleep, **UNVERIFIED**) | New in v2                                                                                                      |
+| GET    | `/v2/cycle/{cycleId}/recovery`        | read:recovery                                          |                                                                                                                |
+| GET    | `/v2/recovery`                        | read:recovery                                          | Sorted by the related sleep's start time, newest first                                                         |
+| GET    | `/v2/activity/sleep`                  | read:sleep                                             | Paginated                                                                                                      |
+| GET    | `/v2/activity/sleep/{sleepId}`        | read:sleep                                             | `sleepId` is a UUID                                                                                            |
+| GET    | `/v2/activity/workout`                | read:workout                                           | Paginated                                                                                                      |
+| GET    | `/v2/activity/workout/{workoutId}`    | read:workout                                           | `workoutId` is a UUID                                                                                          |
+| GET    | `/v1/activity-mapping/{activityV1Id}` | none in the spec                                       | Maps an old ID to `{ v2_activity_id }`. For one-time migration only. Documents only 200, 404 and 500 responses |
 - **There is no "workouts by cycle" endpoint.** To get a cycle's workouts, query the workout collection with `start` and `end` set to the cycle's bounds.
 - **There are no write endpoints for consumer data.** The `/v2/partner/*` endpoints (Trusted Partner client credentials, lab and diagnostics workflows) do accept POST and PATCH, but they are irrelevant here. Exclude them from type generation.
 - **Responses:** each endpoint documents some of 200, 400, 401, 404, 429 and 500. The spec defines no error body schema (**UNVERIFIED**).
@@ -109,13 +108,12 @@
 
 These apply to the cycle, recovery, sleep and workout collections.
 
-| Parameter | Meaning |
-|---|---|
-| `limit` | int32, default 10, **maximum 25** |
-| `start` | ISO 8601 datetime, inclusive |
-| `end` | ISO 8601 datetime, exclusive; defaults to now |
-| `nextToken` | Pass the previous response's `next_token` |
-
+| Parameter   | Meaning                                       |
+| ----------- | --------------------------------------------- |
+| `limit`     | int32, default 10, **maximum 25**             |
+| `start`     | ISO 8601 datetime, inclusive                  |
+| `end`       | ISO 8601 datetime, exclusive; defaults to now |
+| `nextToken` | Pass the previous response's `next_token`     |
 - The response shape is `{ records, next_token? }`, sorted newest first.
 - If `next_token` is missing, you are on the last page.
 - **Observed but not documented:** WHOOP returns `next_token: null` and explicit `null` for optional fields. This broke strict zod schemas in shashank #276. Parse every optional field with `.nullish()`.
@@ -156,20 +154,20 @@ These apply to the cycle, recovery, sleep and workout collections.
 
 **1. Authorize.** Send a GET to `.../oauth2/auth` with these parameters:
 
-| Parameter | Value |
-|---|---|
-| `response_type` | `code` |
-| `client_id` | the user's app client ID |
-| `redirect_uri` | the registered loopback URI |
-| `scope` | `offline read:recovery read:cycles read:sleep read:workout read:profile read:body_measurement`, space-separated (`URLSearchParams` encodes spaces as `+`; this works in practice per domestique, but WHOOP doesn't document the separator) |
-| `state` | see the state rules below |
+| Parameter       | Value                                                                                                                                                                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `response_type` | `code`                                                                                                                                                                                                                                     |
+| `client_id`     | the user's app client ID                                                                                                                                                                                                                   |
+| `redirect_uri`  | the registered loopback URI                                                                                                                                                                                                                |
+| `scope`         | `offline read:recovery read:cycles read:sleep read:workout read:profile read:body_measurement`, space-separated (`URLSearchParams` encodes spaces as `+`; this works in practice per domestique, but WHOOP doesn't document the separator) |
+| `state`         | see the state rules below                                                                                                                                                                                                                  |
 
 **2. Code exchange.** POST to `.../oauth2/token` with `application/x-www-form-urlencoded` and `grant_type=authorization_code`, `code`, `client_id`, `client_secret`, `redirect_uri`.
 - WHOOP's own docs don't list this request body. It comes from domestique's working client.
 - Discovery advertises `client_secret_post`, `client_secret_basic`, `private_key_jwt` and `none`.
 
 **3. Refresh.** POST to the same URL with `grant_type=refresh_token`, `refresh_token`, `client_id`, `client_secret`, `scope=offline`.
-- **Correction:** the docs never say `scope` is *required* on refresh. Their example includes it, and field reports suggest leaving it out causes problems (shashank #249). Always send it.
+- **Correction:** the docs never say `scope` is _required_ on refresh. Their example includes it, and field reports suggest leaving it out causes problems (shashank #249). Always send it.
 - **Body encoding:** the OAuth page shows a JSON-style body, while RFC 6749 and working clients use form-urlencoded. Default to form encoding and test JSON as a fallback (**UNVERIFIED**).
 
 **4. Response.** Contains `access_token`, `expires_in`, `refresh_token`, `scope`, `token_type: bearer`.
@@ -216,7 +214,7 @@ These apply to the cycle, recovery, sleep and workout collections.
 
 ### Refresh behaviour and pitfalls
 
-1. **Rotation is single-use.** A refresh invalidates the old refresh token *and* any existing access tokens. If two refreshes run at once, the second fails.
+1. **Rotation is single-use.** A refresh invalidates the old refresh token _and_ any existing access tokens. If two refreshes run at once, the second fails.
    - Whether WHOOP also detects reuse and revokes the whole grant (as Hydra can) is unverifiable. Assume the worst case: one race means the user has to log in again.
 2. **Single-flight within the process.** Keep one shared `refreshPromise` that every concurrent call awaits.
 3. **Cross-process lock.** Use `fs.openSync(lockPath, 'wx')` with the PID inside and a stale-lock timeout, or `proper-lockfile` 4.1.2. While holding the lock:
@@ -278,7 +276,7 @@ These apply to the cycle, recovery, sleep and workout collections.
 - **WHOOP can't be the MCP authorization server.** Its metadata has no PKCE methods, it offers no CIMD or DCR, and it requires a confidential client. Passing tokens through is forbidden.
   - The PKCE-refusal and passthrough wording comes from the 2025-11-25 spec. Whether 2026-07-28 keeps that exact wording is unverified.
 - **Two 2026-07-28 nuances:**
-  - The `offline_access` rule only stops servers from *advertising* it.
+  - The `offline_access` rule only stops servers from _advertising_ it.
   - Clients validate `iss` only when it is present, and WHOOP doesn't advertise support for it.
 
 ---
@@ -287,29 +285,29 @@ These apply to the cycle, recovery, sleep and workout collections.
 
 ### Built on the official v2 API
 
-| Project | Stack | Activity (2026-10-27) | Auth | Tools | What it does well | Problems |
-|---|---|---|---|---|---|---|
-| [shashankswe2020-ux/whoop-mcp](https://github.com/shashankswe2020-ux/whoop-mcp) (npm `whoop-ai-mcp` 1.1.0) | TS/Node 20+ | 175★, 2,866 downloads/month, the most used | Own dev app, localhost:3000, browser OAuth on start | 16 core tools plus 9 HYROX/triathlon tools, 4 resources, 5 prompts | Relative dates, baselines and percentiles, regression trends, `data_quality` flags, aggregate mode, `setup --client=` | Refresh without `scope=offline` (#249), body read twice (#219), draft-07 outputSchema (#251), null `next_token` (#276), cache assumes a single identity (#172), scope creep |
-| [yuridivonis/whoop-mcp-server](https://github.com/yuridivonis/whoop-mcp-server) | TS, Docker | 16★ / 193 forks (Railway template) | Remote, OAuth 2.1, password-gated, tokens encrypted at rest | 6 | Remote-first; stopped storing health data in v1.3.0 | Needs hosting; small toolset |
-| [davidmosiah/whoop-mcp](https://github.com/davidmosiah/whoop-mcp) (`whoop-mcp-unofficial` 0.6.7) | TS/Node, better-sqlite3 | 14★, 1,725 downloads/month | `setup`/`auth`/`doctor` CLI | About 27 | `response_format`, confidence values, demo mode, privacy audit | draft-07 schema (#21); SQLite cache conflicts with §4.2.2 |
-| [oryanomer1/whoop-mcp](https://github.com/oryanomer1/whoop-mcp) (`@oryanomer/whoop-mcp` 1.0.3) | TS/Node 20.11+ | 1★, 888 downloads/month, new | Own dev app, 0600 token file | 10 | **Compact normalized units with `raw:true`**, automatic pagination up to 200, GET-only client enforced by a test, `readOnlyHint`, ships `.mcpb` and a Claude Code plugin | Little track record |
-| [AlixAkhribi/mcp-whoop](https://github.com/AlixAkhribi/mcp-whoop) (`mcp-whoop` 0.8.0) | TS/Node 22+, **SDK v2** | 322 downloads/month | Loopback CLI plus a login offer inside the conversation | 14, gated by granted scopes | Targets spec 2026-07-28, validates env at startup, logs to stderr only | Pre-1.0 |
-| [Yadheedhya06/mcp-server-whoop](https://github.com/Yadheedhya06/mcp-server-whoop) | TS/Node 18+ | 1★, listed in the official registry | 0600 credentials file with path checks | 5 | Minimal; `processing` status, provisional strain, no cache, SBOM and CodeQL | Narrow coverage |
-| [vicens-aniol/whoop-mcp](https://github.com/vicens-aniol/whoop-mcp) | TS on Cloudflare Workers | 0★ | Full OAuth 2.1 authorization server (PKCE, DCR, CIMD, RFC 8414/9728/7009) | 13, mostly 1:1 | **Refresh serialized per user in a Durable Object**; signed webhooks | Spanish UI; no analytics |
-| [nchemb/whoop-mcp](https://github.com/nchemb/whoop-mcp) | TS/Node 22.13+ | 3★ | Shared OAuth relay, capped at 100 users | 6, including `whoop_query` (SQL) | 6-month backfill into SQLite | Every refresh passes through the author's relay; database conflicts with §4.2.2 |
-| [VelkyVenik/missingmcp](https://github.com/VelkyVenik/missingmcp) | Python gateway | 16★ | Multi-user OAuth 2.1, AES-GCM tokens | About 8 | No install needed | 100-user cap; requires trusting a third party |
-| [RomanEvstigneev/whoop-mcp-server](https://github.com/RomanEvstigneev/whoop-mcp-server) | Python | 27★, stale since 2025-07 | Author-hosted relay | 5 | | Hit the "user limit" (#1), expired links (#4, #2) |
-| [nissand/whoop-mcp-server-claude](https://github.com/nissand/whoop-mcp-server-claude) | TS | 16★, stale | Auth code pasted into chat | About 16, 1:1 | | Hardcoded secret (#11); tokens pass through the LLM context |
+| Project                                                                                                    | Stack                    | Activity (2026-10-27)                      | Auth                                                                      | Tools                                                              | What it does well                                                                                                                                                        | Problems                                                                                                                                                                    |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [shashankswe2020-ux/whoop-mcp](https://github.com/shashankswe2020-ux/whoop-mcp) (npm `whoop-ai-mcp` 1.1.0) | TS/Node 20+              | 175★, 2,866 downloads/month, the most used | Own dev app, localhost:3000, browser OAuth on start                       | 16 core tools plus 9 HYROX/triathlon tools, 4 resources, 5 prompts | Relative dates, baselines and percentiles, regression trends, `data_quality` flags, aggregate mode, `setup --client=`                                                    | Refresh without `scope=offline` (#249), body read twice (#219), draft-07 outputSchema (#251), null `next_token` (#276), cache assumes a single identity (#172), scope creep |
+| [yuridivonis/whoop-mcp-server](https://github.com/yuridivonis/whoop-mcp-server)                            | TS, Docker               | 16★ / 193 forks (Railway template)         | Remote, OAuth 2.1, password-gated, tokens encrypted at rest               | 6                                                                  | Remote-first; stopped storing health data in v1.3.0                                                                                                                      | Needs hosting; small toolset                                                                                                                                                |
+| [davidmosiah/whoop-mcp](https://github.com/davidmosiah/whoop-mcp) (`whoop-mcp-unofficial` 0.6.7)           | TS/Node, better-sqlite3  | 14★, 1,725 downloads/month                 | `setup`/`auth`/`doctor` CLI                                               | About 27                                                           | `response_format`, confidence values, demo mode, privacy audit                                                                                                           | draft-07 schema (#21); SQLite cache conflicts with §4.2.2                                                                                                                   |
+| [oryanomer1/whoop-mcp](https://github.com/oryanomer1/whoop-mcp) (`@oryanomer/whoop-mcp` 1.0.3)             | TS/Node 20.11+           | 1★, 888 downloads/month, new               | Own dev app, 0600 token file                                              | 10                                                                 | **Compact normalized units with `raw:true`**, automatic pagination up to 200, GET-only client enforced by a test, `readOnlyHint`, ships `.mcpb` and a Claude Code plugin | Little track record                                                                                                                                                         |
+| [AlixAkhribi/mcp-whoop](https://github.com/AlixAkhribi/mcp-whoop) (`mcp-whoop` 0.8.0)                      | TS/Node 22+, **SDK v2**  | 322 downloads/month                        | Loopback CLI plus a login offer inside the conversation                   | 14, gated by granted scopes                                        | Targets spec 2026-07-28, validates env at startup, logs to stderr only                                                                                                   | Pre-1.0                                                                                                                                                                     |
+| [Yadheedhya06/mcp-server-whoop](https://github.com/Yadheedhya06/mcp-server-whoop)                          | TS/Node 18+              | 1★, listed in the official registry        | 0600 credentials file with path checks                                    | 5                                                                  | Minimal; `processing` status, provisional strain, no cache, SBOM and CodeQL                                                                                              | Narrow coverage                                                                                                                                                             |
+| [vicens-aniol/whoop-mcp](https://github.com/vicens-aniol/whoop-mcp)                                        | TS on Cloudflare Workers | 0★                                         | Full OAuth 2.1 authorization server (PKCE, DCR, CIMD, RFC 8414/9728/7009) | 13, mostly 1:1                                                     | **Refresh serialized per user in a Durable Object**; signed webhooks                                                                                                     | Spanish UI; no analytics                                                                                                                                                    |
+| [nchemb/whoop-mcp](https://github.com/nchemb/whoop-mcp)                                                    | TS/Node 22.13+           | 3★                                         | Shared OAuth relay, capped at 100 users                                   | 6, including `whoop_query` (SQL)                                   | 6-month backfill into SQLite                                                                                                                                             | Every refresh passes through the author's relay; database conflicts with §4.2.2                                                                                             |
+| [VelkyVenik/missingmcp](https://github.com/VelkyVenik/missingmcp)                                          | Python gateway           | 16★                                        | Multi-user OAuth 2.1, AES-GCM tokens                                      | About 8                                                            | No install needed                                                                                                                                                        | 100-user cap; requires trusting a third party                                                                                                                               |
+| [RomanEvstigneev/whoop-mcp-server](https://github.com/RomanEvstigneev/whoop-mcp-server)                    | Python                   | 27★, stale since 2025-07                   | Author-hosted relay                                                       | 5                                                                  |                                                                                                                                                                          | Hit the "user limit" (#1), expired links (#4, #2)                                                                                                                           |
+| [nissand/whoop-mcp-server-claude](https://github.com/nissand/whoop-mcp-server-claude)                      | TS                       | 16★, stale                                 | Auth code pasted into chat                                                | About 16, 1:1                                                      |                                                                                                                                                                          | Hardcoded secret (#11); tokens pass through the LLM context                                                                                                                 |
 
 Smaller projects: JasonBates, jonnyhaynes, AshwanthramKL, rajdeepmondaldotcom, Zayden16 (Go), cunicopia-dev (Postgres) and open-wearables (2,724★, multi-device). [Glama lists more than 20](https://glama.ai/mcp/servers?query=whoop).
 
 ### Built on the private API (avoid)
 
-| Project | Notes |
-|---|---|
-| [thebriangao/totem](https://github.com/thebriangao/totem) | 136★, 55 tools, including writes and private features. Uses Cognito email, password and MFA, impersonates the iOS client, needs re-login about every 30 days. The author says it is against the ToS. Its architecture is worth copying: zod projections, fixture tests, a `raw` escape hatch |
-| [JedPattersonn/whoop-mcp](https://github.com/JedPattersonn/whoop-mcp) | **The only Bun precedent.** Stale (last push 2025-10-28), private API. Its smithery.yaml puts email and password in the config schema. That Smithery passes them as query params is an inference the repo doesn't show (only partly verified) |
-| [ctvidic/whoop-mcp-server](https://github.com/ctvidic/whoop-mcp-server) | Broken install |
+| Project                                                                 | Notes                                                                                                                                                                                                                                                                                        |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [thebriangao/totem](https://github.com/thebriangao/totem)               | 136★, 55 tools, including writes and private features. Uses Cognito email, password and MFA, impersonates the iOS client, needs re-login about every 30 days. The author says it is against the ToS. Its architecture is worth copying: zod projections, fixture tests, a `raw` escape hatch |
+| [JedPattersonn/whoop-mcp](https://github.com/JedPattersonn/whoop-mcp)   | **The only Bun precedent.** Stale (last push 2025-10-28), private API. Its smithery.yaml puts email and password in the config schema. That Smithery passes them as query params is an inference the repo doesn't show (only partly verified)                                                |
+| [ctvidic/whoop-mcp-server](https://github.com/ctvidic/whoop-mcp-server) | Broken install                                                                                                                                                                                                                                                                               |
 
 ### Reusable TypeScript clients
 
@@ -334,37 +332,37 @@ Smaller projects: JasonBates, jonnyhaynes, AshwanthramKL, rajdeepmondaldotcom, Z
 
 ### Gaps we can fill
 
-| Gap | What we'd do |
-|---|---|
-| **Bun-native single binary** | Use `bun build --compile` per OS. No Node version problems, fast cold start. |
+| Gap                                              | What we'd do                                                                                                                                                                          |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Bun-native single binary**                     | Use `bun build --compile` per OS. No Node version problems, fast cold start.                                                                                                          |
 | **Correct token handling as a headline feature** | In-process single-flight plus cross-process lock, persist before use, re-read on 401, always send `scope=offline`, keychain storage. No local server does multi-process locking well. |
-| **Schemas that tolerate WHOOP's data** | `.nullish()` everywhere, 2020-12 `outputSchema` or none, contract tests against fixtures and the emulator. |
-| **Output that is cheap on tokens and accurate** | Converted units, explicit `score_state`, server-side aggregation, a `response_format` option. The best existing ideas are spread across oryanomer, Yadheedhya06 and shashank. |
-| **Server-side analytics** | Baselines and z-scores, acute:chronic strain, sleep debt, lagged correlations, sample counts and missing days, without shashank's bloat. |
-| **Rate-limit awareness** | Nobody tells the model how much quota is left. |
-| **Caching that respects the ToU** | Memory only. Several projects keep SQLite or Postgres mirrors. |
-| **Resources and prompts** | Rare in existing projects and cheap to add. |
-| **Onboarding** | A guided `setup` command with the exact dashboard fields, `doctor` and status tools, and a synthetic demo mode. |
-| **Later: one codebase for local and remote** | Optional Streamable HTTP plus OAuth 2.1 plus webhooks. |
+| **Schemas that tolerate WHOOP's data**           | `.nullish()` everywhere, 2020-12 `outputSchema` or none, contract tests against fixtures and the emulator.                                                                            |
+| **Output that is cheap on tokens and accurate**  | Converted units, explicit `score_state`, server-side aggregation, a `response_format` option. The best existing ideas are spread across oryanomer, Yadheedhya06 and shashank.         |
+| **Server-side analytics**                        | Baselines and z-scores, acute:chronic strain, sleep debt, lagged correlations, sample counts and missing days, without shashank's bloat.                                              |
+| **Rate-limit awareness**                         | Nobody tells the model how much quota is left.                                                                                                                                        |
+| **Caching that respects the ToU**                | Memory only. Several projects keep SQLite or Postgres mirrors.                                                                                                                        |
+| **Resources and prompts**                        | Rare in existing projects and cheap to add.                                                                                                                                           |
+| **Onboarding**                                   | A guided `setup` command with the exact dashboard fields, `doctor` and status tools, and a synthetic demo mode.                                                                       |
+| **Later: one codebase for local and remote**     | Optional Streamable HTTP plus OAuth 2.1 plus webhooks.                                                                                                                                |
 
 ---
 
 ## 5. Recommended stack
 
-| Layer | Choice | Why |
-|---|---|---|
-| Runtime | **Bun 1.4.4** | Built-in `fetch`, `Bun.serve` (callback, later HTTP), `Bun.secrets`, `bun test`, `--compile`. Few dependencies. |
-| MCP SDK | **`@modelcontextprotocol/server` 2.4.0** (published 2026-10-23) | See below. |
-| Schemas | **`zod` ^4.2.0** via `import * as z from 'zod/v4'`, with `"overrides": { "zod": "^4.2.0" }` | The SDK requires zod 4. Two zod copies in the tree cause TS2589 and type errors. Whether zod v3 schemas work is **UNVERIFIED**; assume they don't. |
-| Transport | **stdio via `serveStdio(factory)`** | Fits Claude Desktop and Claude Code. Later, `createMcpHandler(factory)` returns a `{ fetch }` object that Bun serves directly. |
-| Types | `bunx openapi-typescript https://api.prod.whoop.com/developer/doc/openapi.json -o src/whoop.d.ts`, filtering out `/v2/partner/*` | Generated from the spec. Add the gaps by hand: `offline` scope, error bodies, nullability. |
-| Runtime validation | Hand-written zod projections over the generated types, `.nullish()` throughout | Tolerates WHOOP's quirks and catches drift (totem's pattern). |
-| HTTP client | A thin wrapper over `fetch` | Bearer auth, 401 → re-read store / refresh once, 429 backoff using `X-RateLimit-Reset`, multi-window header parser, logs `x-whoop-trace-id` to stderr, GET-only (enforced by a test). |
-| Cache | **In-memory LRU with short TTLs, keyed by user ID and query** | See below. |
-| Token storage | `Bun.secrets`, then a 0600 file (encryption optional) | See §3. |
-| Locking | `fs.openSync(...,'wx')` lockfile or `proper-lockfile` 4.1.2 | Cross-process refresh. |
-| Testing | `bun test` + SDK `InMemoryTransport` (both halves from the same package) + mockingbird emulator + recorded fixtures (synthetic or scrubbed) + MCP Inspector 2.12.0 | See below. |
-| Packaging | (1) `bun build --compile --minify --bytecode` for darwin-arm64/x64, linux-x64/arm64 (+musl), windows-x64; (2) npm package with a `bin` entry for `bunx`; (3) MCPB `manifest_version: "0.3"`, `server.type: "binary"` with `platform_overrides`; (4) official registry `server.json` | See below. |
+| Layer              | Choice                                                                                                                                                                                                                                                                              | Why                                                                                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime            | **Bun 1.4.4**                                                                                                                                                                                                                                                                       | Built-in `fetch`, `Bun.serve` (callback, later HTTP), `Bun.secrets`, `bun test`, `--compile`. Few dependencies.                                                                       |
+| MCP SDK            | **`@modelcontextprotocol/server` 2.4.0** (published 2026-10-23)                                                                                                                                                                                                                     | See below.                                                                                                                                                                            |
+| Schemas            | **`zod` ^4.2.0** via `import * as z from 'zod/v4'`, with `"overrides": { "zod": "^4.2.0" }`                                                                                                                                                                                         | The SDK requires zod 4. Two zod copies in the tree cause TS2589 and type errors. Whether zod v3 schemas work is **UNVERIFIED**; assume they don't.                                    |
+| Transport          | **stdio via `serveStdio(factory)`**                                                                                                                                                                                                                                                 | Fits Claude Desktop and Claude Code. Later, `createMcpHandler(factory)` returns a `{ fetch }` object that Bun serves directly.                                                        |
+| Types              | `bunx openapi-typescript https://api.prod.whoop.com/developer/doc/openapi.json -o src/whoop.d.ts`, filtering out `/v2/partner/*`                                                                                                                                                    | Generated from the spec. Add the gaps by hand: `offline` scope, error bodies, nullability.                                                                                            |
+| Runtime validation | Hand-written zod projections over the generated types, `.nullish()` throughout                                                                                                                                                                                                      | Tolerates WHOOP's quirks and catches drift (totem's pattern).                                                                                                                         |
+| HTTP client        | A thin wrapper over `fetch`                                                                                                                                                                                                                                                         | Bearer auth, 401 → re-read store / refresh once, 429 backoff using `X-RateLimit-Reset`, multi-window header parser, logs `x-whoop-trace-id` to stderr, GET-only (enforced by a test). |
+| Cache              | **In-memory LRU with short TTLs, keyed by user ID and query**                                                                                                                                                                                                                       | See below.                                                                                                                                                                            |
+| Token storage      | `Bun.secrets`, then a 0600 file (encryption optional)                                                                                                                                                                                                                               | See §3.                                                                                                                                                                               |
+| Locking            | `fs.openSync(...,'wx')` lockfile or `proper-lockfile` 4.1.2                                                                                                                                                                                                                         | Cross-process refresh.                                                                                                                                                                |
+| Testing            | `bun test` + SDK `InMemoryTransport` (both halves from the same package) + mockingbird emulator + recorded fixtures (synthetic or scrubbed) + MCP Inspector 2.12.0                                                                                                                  | See below.                                                                                                                                                                            |
+| Packaging          | (1) `bun build --compile --minify --bytecode` for darwin-arm64/x64, linux-x64/arm64 (+musl), windows-x64; (2) npm package with a `bin` entry for `bunx`; (3) MCPB `manifest_version: "0.3"`, `server.type: "binary"` with `platform_overrides`; (4) official registry `server.json` | See below.                                                                                                                                                                            |
 
 **Why SDK v2 rather than the alternatives:**
 - It is runtime-neutral, and its README says it runs on Bun.
@@ -404,7 +402,7 @@ Smaller projects: JasonBates, jonnyhaynes, AshwanthramKL, rajdeepmondaldotcom, Z
 - Set annotations `readOnlyHint: true` and `idempotentHint: true`.
 - Return `structuredContent` together with a short text rendering.
 - Argument validation failures become `isError: true` results, which the model can read and retry from.
-- `maxToolInputElements` goes in the constructor's *second* (options) argument and is off by default.
+- `maxToolInputElements` goes in the constructor's _second_ (options) argument and is off by default.
 - The transport's `maxRequestBodySize` is 4 MiB.
 - Return tools from `tools/list` in a deterministic order.
 - **2026-07-28 details:**
@@ -446,20 +444,20 @@ Smaller projects: JasonBates, jonnyhaynes, AshwanthramKL, rajdeepmondaldotcom, Z
 
 ### Tools
 
-| Tool | Parameters | Returns |
-|---|---|---|
-| `whoop_today` | `date?` (default today), `response_format` | One snapshot: last night's sleep (duration, stage breakdown, performance/efficiency, sleep needed vs. obtained), today's recovery (score, HRV, RHR, SpO2/skin temp if available), the current cycle's strain so far (marked provisional if the cycle is open), steps if present, today's workouts. Joins the cycle, recovery, sleep and workout endpoints |
-| `whoop_daily_summaries` | `start_date`, `end_date` or `days`, `response_format`, `raw` | One row per day: recovery %, HRV, RHR, sleep hours/performance, day strain, kcal, workouts count, steps. Paging is handled inside the server |
-| `whoop_trends` | `metric` (enum: `recovery`, `hrv`, `rhr`, `sleep_duration`, `sleep_performance`, `strain`, `steps`, `respiratory_rate`, …), `days` (default 30, max 90), `response_format` | Mean, median, min, max, standard deviation, linear slope per week, 7-day rolling values, the latest value vs. the period's percentile, `n`, missing days |
-| `whoop_baselines` | `days` (default 30), `metrics?` | A personal baseline (mean, standard deviation, p10/p50/p90) per metric, with a minimum sample count; plus today's z-score per metric |
-| `whoop_compare_periods` | `period_a` {start_date, end_date}, `period_b` {…}, `metrics?` | Side-by-side means, absolute and % change, `n` per period |
-| `whoop_training_load` | `days` (default 28) | Daily strain, 7-day acute and 28-day chronic load, acute:chronic ratio, sleep debt (from `sleep_needed`), workout time per HR zone |
-| `whoop_correlate` | `x_metric`, `y_metric`, `lag_days` (0–3), `days` (max 90) | Pearson/Spearman correlation and `n`; example: "strain > 15 vs. next-day recovery". Includes a note that correlation is not causation |
-| `whoop_workouts` | `start_date`, `end_date` or `days`, `sport?` (matched on `sport_name`), `response_format`, `raw` | A list: sport, local start time, duration, strain, average and max HR, kcal, distance, altitude, time in zones, `percent_recorded`; plus totals grouped by sport |
-| `whoop_sleep_detail` | `date?` or `start_date`/`end_date`, `include_naps` (default false) | Per-sleep stages, disturbances, sleep cycles, sleep-needed breakdown, consistency and efficiency |
-| `whoop_profile` | none | Name, height, weight, max HR. Email only when `detailed` |
-| `whoop_get_record` | `type` (`cycle`, `sleep`, `workout`, `recovery_for_cycle`, `sleep_for_cycle`), `id` | The escape hatch: one normalized record, plus the raw object |
-| `whoop_status` | none | Auth state, granted scopes, token expiry, rate-limit quota, cache stats, server version. Works without a login, as the "doctor" |
+| Tool                    | Parameters                                                                                                                                                                 | Returns                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `whoop_today`           | `date?` (default today), `response_format`                                                                                                                                 | One snapshot: last night's sleep (duration, stage breakdown, performance/efficiency, sleep needed vs. obtained), today's recovery (score, HRV, RHR, SpO2/skin temp if available), the current cycle's strain so far (marked provisional if the cycle is open), steps if present, today's workouts. Joins the cycle, recovery, sleep and workout endpoints |
+| `whoop_daily_summaries` | `start_date`, `end_date` or `days`, `response_format`, `raw`                                                                                                               | One row per day: recovery %, HRV, RHR, sleep hours/performance, day strain, kcal, workouts count, steps. Paging is handled inside the server                                                                                                                                                                                                              |
+| `whoop_trends`          | `metric` (enum: `recovery`, `hrv`, `rhr`, `sleep_duration`, `sleep_performance`, `strain`, `steps`, `respiratory_rate`, …), `days` (default 30, max 90), `response_format` | Mean, median, min, max, standard deviation, linear slope per week, 7-day rolling values, the latest value vs. the period's percentile, `n`, missing days                                                                                                                                                                                                  |
+| `whoop_baselines`       | `days` (default 30), `metrics?`                                                                                                                                            | A personal baseline (mean, standard deviation, p10/p50/p90) per metric, with a minimum sample count; plus today's z-score per metric                                                                                                                                                                                                                      |
+| `whoop_compare_periods` | `period_a` {start_date, end_date}, `period_b` {…}, `metrics?`                                                                                                              | Side-by-side means, absolute and % change, `n` per period                                                                                                                                                                                                                                                                                                 |
+| `whoop_training_load`   | `days` (default 28)                                                                                                                                                        | Daily strain, 7-day acute and 28-day chronic load, acute:chronic ratio, sleep debt (from `sleep_needed`), workout time per HR zone                                                                                                                                                                                                                        |
+| `whoop_correlate`       | `x_metric`, `y_metric`, `lag_days` (0–3), `days` (max 90)                                                                                                                  | Pearson/Spearman correlation and `n`; example: "strain > 15 vs. next-day recovery". Includes a note that correlation is not causation                                                                                                                                                                                                                     |
+| `whoop_workouts`        | `start_date`, `end_date` or `days`, `sport?` (matched on `sport_name`), `response_format`, `raw`                                                                           | A list: sport, local start time, duration, strain, average and max HR, kcal, distance, altitude, time in zones, `percent_recorded`; plus totals grouped by sport                                                                                                                                                                                          |
+| `whoop_sleep_detail`    | `date?` or `start_date`/`end_date`, `include_naps` (default false)                                                                                                         | Per-sleep stages, disturbances, sleep cycles, sleep-needed breakdown, consistency and efficiency                                                                                                                                                                                                                                                          |
+| `whoop_profile`         | none                                                                                                                                                                       | Name, height, weight, max HR. Email only when `detailed`                                                                                                                                                                                                                                                                                                  |
+| `whoop_get_record`      | `type` (`cycle`, `sleep`, `workout`, `recovery_for_cycle`, `sleep_for_cycle`), `id`                                                                                        | The escape hatch: one normalized record, plus the raw object                                                                                                                                                                                                                                                                                              |
+| `whoop_status`          | none                                                                                                                                                                       | Auth state, granted scopes, token expiry, rate-limit quota, cache stats, server version. Works without a login, as the "doctor"                                                                                                                                                                                                                           |
 
 **Kept out of the MCP tool surface:**
 - `login`, `logout` (revoke plus delete) and `purge-cache` are CLI subcommands, so the LLM can't do anything destructive or touch credentials.
@@ -523,15 +521,15 @@ whoop-mcp/
 
 ### Milestones
 
-| # | Milestone | Done when |
-|---|---|---|
-| M0 | **Spike and verification** (½–1 day) | Dev app created. Probes run: http://127.0.0.1 redirect acceptance; `state` length; form vs. JSON token body; PKCE with the secret; whether `scope=offline` on refresh matters; `expires_in`; whether `openid` returns an id_token. SDK v2 smoke test under `bun run` **and** `bun build --compile` with stdio. Results recorded in `docs/verification.md` |
-| M1 | **Auth core** | `login` / `logout` / `status` CLI. Both token stores. Single-flight plus cross-process lock. 401 re-read path. Race tests pass |
-| M2 | **API client** | Generated types, zod projections, pagination iterator, rate-limit parser, 429 backoff, in-memory cache. Contract tests against fixtures and the emulator |
-| M3 | **First tools** | `whoop_today`, `whoop_daily_summaries`, `whoop_workouts`, `whoop_sleep_detail`, `whoop_profile`, `whoop_status`, `whoop_get_record`. Checked with Inspector (both protocol eras) and in Claude Code and Claude Desktop |
-| M4 | **Analytics** | `whoop_trends`, `whoop_baselines`, `whoop_compare_periods`, `whoop_training_load`, `whoop_correlate`. Resources and prompts. Demo mode |
-| M5 | **Packaging** | Cross-compiled binaries, signed on macOS. npm/bunx package. `.mcpb`. `setup` command writes client configs. Registry `server.json`. README with exact dashboard steps |
-| M6 (optional) | **Remote mode** | `createMcpHandler` on `Bun.serve` with Host/Origin validation. Our own OAuth 2.1 authorization server (RFC 9728, CIMD, PKCE). Encrypted WHOOP grant per user. Webhooks with HMAC, `trace_id` dedup and cache invalidation. Needs a ToU and legal review first (§3.1.3, §4.2.1) |
+| #             | Milestone                            | Done when                                                                                                                                                                                                                                                                                                                                                 |
+| ------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0            | **Spike and verification** (½–1 day) | Dev app created. Probes run: http://127.0.0.1 redirect acceptance; `state` length; form vs. JSON token body; PKCE with the secret; whether `scope=offline` on refresh matters; `expires_in`; whether `openid` returns an id_token. SDK v2 smoke test under `bun run` **and** `bun build --compile` with stdio. Results recorded in `docs/verification.md` |
+| M1            | **Auth core**                        | `login` / `logout` / `status` CLI. Both token stores. Single-flight plus cross-process lock. 401 re-read path. Race tests pass                                                                                                                                                                                                                            |
+| M2            | **API client**                       | Generated types, zod projections, pagination iterator, rate-limit parser, 429 backoff, in-memory cache. Contract tests against fixtures and the emulator                                                                                                                                                                                                  |
+| M3            | **First tools**                      | `whoop_today`, `whoop_daily_summaries`, `whoop_workouts`, `whoop_sleep_detail`, `whoop_profile`, `whoop_status`, `whoop_get_record`. Checked with Inspector (both protocol eras) and in Claude Code and Claude Desktop                                                                                                                                    |
+| M4            | **Analytics**                        | `whoop_trends`, `whoop_baselines`, `whoop_compare_periods`, `whoop_training_load`, `whoop_correlate`. Resources and prompts. Demo mode                                                                                                                                                                                                                    |
+| M5            | **Packaging**                        | Cross-compiled binaries, signed on macOS. npm/bunx package. `.mcpb`. `setup` command writes client configs. Registry `server.json`. README with exact dashboard steps                                                                                                                                                                                     |
+| M6 (optional) | **Remote mode**                      | `createMcpHandler` on `Bun.serve` with Host/Origin validation. Our own OAuth 2.1 authorization server (RFC 9728, CIMD, PKCE). Encrypted WHOOP grant per user. Webhooks with HMAC, `trace_id` dedup and cache invalidation. Needs a ToU and legal review first (§3.1.3, §4.2.1)                                                                            |
 
 ---
 
