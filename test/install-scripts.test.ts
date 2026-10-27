@@ -71,10 +71,19 @@ const REOPEN = "open -b com.anthropic.claudefordesktop";
 
 /** A stand-in "Claude" process that ignores the (fake) quit request, like a cancelled quit dialog. */
 async function startFakeClaude() {
-  const exe = join(work, "FakeClaudeProc");
-  // A symlink (a copied system binary is killed by macOS code signing); `ps` reports the name it ran as.
-  await $`ln -s /bin/sleep ${exe}`.quiet();
-  const proc = Bun.spawn([exe, "60"], { stdout: "ignore", stderr: "ignore" });
+  let cmd: string[];
+  if (process.platform === "darwin") {
+    // macOS reports a symlink by the name it ran as (a copied system binary would be killed by code signing).
+    const exe = join(work, "FakeClaudeProc");
+    await $`ln -s /bin/sleep ${exe}`.quiet();
+    cmd = [exe, "60"];
+  } else {
+    // Linux reports a symlink by its target's name, but perl renames its own process when $0 is set.
+    cmd = ["perl", "-e", '$0 = "FakeClaudeProc"; sleep 60'];
+  }
+  const proc = Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" });
+  // Wait until `ps` sees it, so the test can't race the process starting.
+  for (let i = 0; i < 40 && !(await $`ps -xo comm=`.text()).includes("FakeClaudeProc"); i++) await Bun.sleep(25);
   return { pattern: "FakeClaudeProc$", stop: () => proc.kill() };
 }
 
