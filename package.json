@@ -1,0 +1,32 @@
+{
+  "name": "whoop-mcp",
+  "version": "0.0.1",
+  "description": "MCP server for the WHOOP Developer API (v2), built for Bun",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "whoop-mcp": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "login": "bun run src/index.ts login",
+    "status": "bun run src/index.ts status",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "gen:types": "bun run scripts/gen-types.ts",
+    "inspect": "bunx @modelcontextprotocol/inspector bun run src/index.ts",
+    "build": "bun build src/index.ts --compile --minify --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile dist/whoop-mcp"
+  },
+  "overrides": {
+    "zod": "^4.2.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@types/bun": "^1.4.4",
+    "typescript": "^7.0.2"
+  }
+}

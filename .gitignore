@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+docs/m0-results.json
+*.log
+.DS_Store
+*.bun-build
