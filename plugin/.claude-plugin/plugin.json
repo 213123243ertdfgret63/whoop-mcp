@@ -1,0 +1,44 @@
+{
+  "name": "whoop",
+  "version": "0.0.1",
+  "description": "WHOOP recovery, sleep, strain and workout data in Claude, via your own WHOOP developer app.",
+  "author": {
+    "name": "213123243ertdfgret63",
+    "url": "https://github.com/213123243ertdfgret63"
+  },
+  "repository": "https://github.com/213123243ertdfgret63/whoop-mcp",
+  "keywords": ["whoop", "health", "fitness", "sleep", "recovery", "mcp"],
+  "userConfig": {
+    "client_id": {
+      "type": "string",
+      "title": "WHOOP Client ID",
+      "description": "From your app at https://developer-dashboard.whoop.com (set its redirect URI to http://localhost:8787/callback).",
+      "required": true
+    },
+    "client_secret": {
+      "type": "string",
+      "title": "WHOOP Client Secret",
+      "description": "From the same WHOOP developer app. Stored in your system keychain.",
+      "required": true,
+      "sensitive": true
+    },
+    "redirect_uri": {
+      "type": "string",
+      "title": "Redirect URI",
+      "description": "Must match the redirect URI registered on your WHOOP app exactly.",
+      "default": "http://localhost:8787/callback"
+    }
+  },
+  "mcpServers": {
+    "whoop": {
+      "command": "bun",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/whoop-mcp.js"],
+      "env": {
+        "WHOOP_CLIENT_ID": "${user_config.client_id}",
+        "WHOOP_CLIENT_SECRET": "${user_config.client_secret}",
+        "WHOOP_REDIRECT_URI": "${user_config.redirect_uri}",
+        "WHOOP_MCP_HOME": "${CLAUDE_PLUGIN_DATA}"
+      }
+    }
+  }
+}

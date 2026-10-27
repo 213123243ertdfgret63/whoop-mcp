@@ -5,6 +5,7 @@ import {
   ConfigError,
   configDir,
   DEFAULT_REDIRECT_URI,
+  envValue,
   loadClientCredentials,
 } from "../config.ts";
 import { readPrivateJson, writePrivateJson } from "./store.ts";
@@ -86,13 +87,13 @@ export async function deleteStoredCredentials(): Promise<boolean> {
 export async function resolveClientCredentials(
   env = process.env,
 ): Promise<{ creds: ClientCredentials; source: CredentialSource }> {
-  if (env.WHOOP_CLIENT_ID?.trim() && env.WHOOP_CLIENT_SECRET?.trim()) {
+  if (envValue(env.WHOOP_CLIENT_ID) && envValue(env.WHOOP_CLIENT_SECRET)) {
     return { creds: loadClientCredentials(env), source: "env" };
   }
   const stored = await readStoredCredentials();
   if (stored) {
     // A redirect override still applies to stored credentials.
-    const redirectUri = env.WHOOP_REDIRECT_URI?.trim();
+    const redirectUri = envValue(env.WHOOP_REDIRECT_URI);
     return redirectUri ? { ...stored, creds: { ...stored.creds, redirectUri } } : stored;
   }
   throw new ConfigError("No WHOOP app credentials found. Run `whoop-mcp setup` in a terminal.");

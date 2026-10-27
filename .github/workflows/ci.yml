@@ -18,10 +18,13 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # macOS runners are scarce (jobs can queue until cancelled) and cost 10x minutes on private repos,
+        # so pushes and PRs run on Ubuntu; trigger the workflow manually to include macOS.
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
     env:
       # Skip installing git hooks on CI runners.
       HUSKY: "0"
@@ -38,6 +41,16 @@ jobs:
       - name: Lint and format check
         if: runner.os == 'Linux'
         run: bunx biome ci .
+
+      # The plugin runs this committed bundle; a stale one would ship old code to plugin users.
+      - name: Plugin bundle is up to date
+        if: runner.os == 'Linux'
+        run: |
+          bun run build:plugin
+          git diff --exit-code -- plugin/server/whoop-mcp.js || {
+            echo "::error::plugin/server/whoop-mcp.js is stale; run 'bun run build:plugin' and commit it"
+            exit 1
+          }
 
       - name: Typecheck
         run: bun run typecheck

@@ -16,6 +16,8 @@ export interface LoginOptions {
   auth?: ClientAuthMethod;
   openBrowser?: boolean;
   timeoutMs?: number;
+  /** Called once the callback server is listening, with the URL the user must open. */
+  onAuthorizeUrl?: (url: string) => void;
 }
 
 export interface LoginResult {
@@ -92,6 +94,7 @@ export async function login(creds: ClientCredentials, opts: LoginOptions = {}): 
   );
 
   log(`Open this URL to authorize WHOOP access:\n\n  ${authorizeUrl}\n`);
+  opts.onAuthorizeUrl?.(authorizeUrl);
   if (opts.openBrowser ?? true) openUrl(authorizeUrl);
 
   try {

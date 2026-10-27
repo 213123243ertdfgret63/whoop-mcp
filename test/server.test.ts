@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { BackgroundLogin } from "../src/auth/background-login.ts";
 import { SCOPES, VERSION } from "../src/config.ts";
 import { createServer } from "../src/server.ts";
 import { NotLoggedInError, WhoopApiError, type WhoopClient } from "../src/whoop/client.ts";
@@ -53,9 +54,9 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-async function connect(responses: Responses = OK_RESPONSES) {
+async function connect(responses: Responses = OK_RESPONSES, loginFlow?: BackgroundLogin) {
   const stub = stubClient(responses);
-  const server = createServer(stub as unknown as WhoopClient);
+  const server = createServer(stub as unknown as WhoopClient, loginFlow);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   client = new Client({ name: "server-test", version: "0.0.0" });
@@ -71,14 +72,17 @@ async function writeTokenFile(tokens: Record<string, unknown>) {
 }
 
 describe("tools/list", () => {
-  test("exposes exactly whoop_status and whoop_profile as read-only, idempotent tools", async () => {
+  test("exposes whoop_status and whoop_profile as read-only and whoop_login as a non-destructive write", async () => {
     const { client } = await connect();
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["whoop_profile", "whoop_status"]);
-    for (const t of tools) {
-      expect(t.annotations?.readOnlyHint).toBe(true);
-      expect(t.annotations?.idempotentHint).toBe(true);
-    }
+    expect(tools.map((t) => t.name).sort()).toEqual(["whoop_login", "whoop_profile", "whoop_status"]);
+    for (const t of tools) expect(t.annotations?.idempotentHint).toBe(true);
+    const byName = (n: string) => tools.find((t) => t.name === n)?.annotations;
+    expect(byName("whoop_status")?.readOnlyHint).toBe(true);
+    expect(byName("whoop_profile")?.readOnlyHint).toBe(true);
+    // whoop_login writes tokens, so clients should not treat it as read-only; it never deletes anything.
+    expect(byName("whoop_login")?.readOnlyHint).toBe(false);
+    expect(byName("whoop_login")?.destructiveHint).toBe(false);
   });
 
   test("whoop_status is marked as not touching the outside world, whoop_profile is", async () => {
@@ -96,6 +100,8 @@ describe("whoop_status", () => {
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({
       logged_in: false,
+      app_credentials: "missing",
+      login: { state: "idle" },
       token_file: join(home, "tokens.json"),
       scopes: [],
       missing_scopes: [...SCOPES],
@@ -103,7 +109,7 @@ describe("whoop_status", () => {
       has_refresh_token: false,
       server_version: VERSION,
     });
-    expect(text(result)).toContain("whoop-mcp login");
+    expect(text(result)).toContain("No WHOOP app credentials");
     expect(stub.calls).toEqual([]);
   });
 
@@ -245,5 +251,67 @@ describe("whoop_profile", () => {
 
     const ok = await client.callTool({ name: "whoop_profile", arguments: {} });
     expect(ok.isError).toBeFalsy();
+  });
+});
+
+describe("whoop_login", () => {
+  const AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth?state=xyz";
+
+  /** A login flow whose browser step the test completes by hand; tokens are really written to the temp home. */
+  function fakeFlow() {
+    let approve = () => {};
+    const flow = new BackgroundLogin({
+      resolveCreds: async () => ({ clientId: "id", clientSecret: "s", redirectUri: "http://localhost:8787/callback" }),
+      openBrowser: false,
+      login: (_c, opts) =>
+        new Promise((resolve) => {
+          queueMicrotask(() => opts.onAuthorizeUrl?.(AUTH_URL));
+          approve = () =>
+            resolve({
+              tokens: {
+                access_token: "a",
+                refresh_token: "r",
+                expires_in: 3600,
+                token_type: "bearer",
+                scope: "offline",
+              },
+              callbackParams: {},
+            });
+        }),
+    });
+    return { flow, approve: () => approve() };
+  }
+
+  test("returns the consent URL immediately and status shows the pending login", async () => {
+    const { flow } = fakeFlow();
+    const { client } = await connect(OK_RESPONSES, flow);
+    const result = await client.callTool({ name: "whoop_login", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(text(result)).toContain(AUTH_URL);
+    expect(text(result)).toContain("whoop_status");
+
+    const status = await client.callTool({ name: "whoop_status", arguments: {} });
+    expect(status.structuredContent).toMatchObject({
+      logged_in: false,
+      login: { state: "pending", authorize_url: AUTH_URL },
+    });
+    expect(text(status)).toContain("Waiting for the user to approve");
+  });
+
+  test("once the user approves, status reports logged in with the saved tokens", async () => {
+    const { flow, approve } = fakeFlow();
+    const { client } = await connect(OK_RESPONSES, flow);
+    await client.callTool({ name: "whoop_login", arguments: {} });
+    approve();
+    await flow.settled();
+    const status = await client.callTool({ name: "whoop_status", arguments: {} });
+    expect(status.structuredContent).toMatchObject({ logged_in: true, login: { state: "succeeded" } });
+  });
+
+  test("without app credentials returns an actionable error instead of opening a browser", async () => {
+    const { client } = await connect(OK_RESPONSES, new BackgroundLogin({ openBrowser: false }));
+    const result = await client.callTool({ name: "whoop_login", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("whoop-mcp setup");
   });
 });

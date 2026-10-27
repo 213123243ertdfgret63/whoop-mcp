@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
+import { BackgroundLogin } from "./auth/background-login.ts";
+import { resolveClientCredentials } from "./auth/credentials.ts";
 import { readTokens, tokenPath } from "./auth/store.ts";
 import { SCOPES, VERSION } from "./config.ts";
 import { NotLoggedInError, WhoopApiError, WhoopClient } from "./whoop/client.ts";
@@ -20,7 +22,16 @@ function jsonResult<T extends Record<string, unknown>>(data: T, summary: string)
   };
 }
 
-export function createServer(client = new WhoopClient()): McpServer {
+/** Where the WHOOP app credentials come from, or "missing" (never throws). */
+async function credentialSource(): Promise<"env" | "keychain" | "file" | "missing"> {
+  try {
+    return (await resolveClientCredentials()).source;
+  } catch {
+    return "missing";
+  }
+}
+
+export function createServer(client = new WhoopClient(), loginFlow = new BackgroundLogin()): McpServer {
   const server = new McpServer({ name: "whoop-mcp", version: VERSION }, { capabilities: { tools: {} } });
 
   server.registerTool(
@@ -28,9 +39,15 @@ export function createServer(client = new WhoopClient()): McpServer {
     {
       title: "WHOOP connection status",
       description:
-        "Check whether the WHOOP account is connected: login state, granted scopes and token expiry. Makes no WHOOP API calls. Use this first if other whoop_ tools fail.",
+        "Check whether the WHOOP account is connected: app credentials, login state (including a browser login started with whoop_login), granted scopes and token expiry. Makes no WHOOP API calls. Use this first if other whoop_ tools fail.",
       outputSchema: z.object({
         logged_in: z.boolean(),
+        app_credentials: z.enum(["env", "keychain", "file", "missing"]),
+        login: z.object({
+          state: z.enum(["idle", "pending", "succeeded", "failed"]),
+          authorize_url: z.string().optional(),
+          error: z.string().optional(),
+        }),
         token_file: z.string(),
         scopes: z.array(z.string()),
         missing_scopes: z.array(z.string()),
@@ -43,8 +60,16 @@ export function createServer(client = new WhoopClient()): McpServer {
     async () => {
       const tokens = await readTokens();
       const scopes = tokens?.scope?.split(/\s+/).filter(Boolean) ?? [];
+      const login = loginFlow.status;
+      const app_credentials = await credentialSource();
       const data = {
         logged_in: tokens !== null,
+        app_credentials,
+        login: {
+          state: login.state,
+          ...(login.state === "pending" ? { authorize_url: login.authorizeUrl } : {}),
+          ...(login.state === "failed" ? { error: login.error } : {}),
+        },
         token_file: tokenPath(),
         scopes,
         missing_scopes: tokens ? SCOPES.filter((s) => !scopes.includes(s)) : [...SCOPES],
@@ -52,10 +77,44 @@ export function createServer(client = new WhoopClient()): McpServer {
         has_refresh_token: Boolean(tokens?.refresh_token),
         server_version: VERSION,
       };
-      return jsonResult(
-        data,
-        data.logged_in ? "WHOOP is connected." : "Not logged in: run `whoop-mcp login` in a terminal.",
-      );
+      const summary = data.logged_in
+        ? "WHOOP is connected."
+        : login.state === "pending"
+          ? `Waiting for the user to approve access in the browser: ${login.authorizeUrl}`
+          : app_credentials === "missing"
+            ? "No WHOOP app credentials yet: add your WHOOP app's client ID and secret (`/plugin configure`, `whoop-mcp setup`, or WHOOP_CLIENT_ID/WHOOP_CLIENT_SECRET), then call whoop_login."
+            : login.state === "failed"
+              ? `The last login failed (${login.error}). Call whoop_login to try again.`
+              : "Not logged in: call whoop_login to sign in with the browser (or run `whoop-mcp login` in a terminal).";
+      return jsonResult(data, summary);
+    },
+  );
+
+  server.registerTool(
+    "whoop_login",
+    {
+      title: "Log in to WHOOP",
+      description:
+        "Start signing in to WHOOP: opens the WHOOP consent page in the user's browser and returns its URL (show it to the user in case the browser didn't open). Returns immediately; the login completes in the background once the user approves, so call whoop_status afterwards to confirm. Needs the WHOOP app credentials to be configured first.",
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async () => {
+      try {
+        const { authorizeUrl, alreadyPending } = await loginFlow.start();
+        const lead = alreadyPending
+          ? "A WHOOP login is already waiting for approval."
+          : "Opened the WHOOP consent page in the browser.";
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `${lead} If it didn't open, visit:\n\n${authorizeUrl}\n\nAfter approving access, call whoop_status to confirm the login.`,
+            },
+          ],
+        };
+      } catch (err) {
+        return errorResult(err);
+      }
     },
   );
 

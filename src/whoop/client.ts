@@ -7,7 +7,7 @@ import { log } from "../log.ts";
 export class NotLoggedInError extends Error {
   override name = "NotLoggedInError";
   constructor() {
-    super("Not logged in to WHOOP. Run `whoop-mcp login` in a terminal first.");
+    super("Not logged in to WHOOP. Call the whoop_login tool (or run `whoop-mcp login` in a terminal) first.");
   }
 }
 

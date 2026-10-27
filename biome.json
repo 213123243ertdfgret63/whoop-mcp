@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!!**/dist", "!src/whoop/openapi.d.ts"]
+    "includes": ["**", "!!**/dist", "!src/whoop/openapi.d.ts", "!plugin/server/whoop-mcp.js"]
   },
   "formatter": {
     "enabled": true,

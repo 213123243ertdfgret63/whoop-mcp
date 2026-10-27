@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { BackgroundLogin } from "./auth/background-login.ts";
 import { deleteStoredCredentials, readStoredCredentials, resolveClientCredentials } from "./auth/credentials.ts";
 import { deleteTokens, readTokens, tokenPath } from "./auth/store.ts";
 import { terminalIO } from "./cli/terminal.ts";
@@ -31,7 +32,11 @@ async function main(): Promise<void> {
     case "serve":
       // Goes to the client's MCP log (stderr), so you can tell which build a client is running.
       log(`v${VERSION} starting (stdio)`);
-      serveStdio(() => createServer());
+      {
+        // One login flow per process, shared by whichever protocol-era instance serves the connection.
+        const loginFlow = new BackgroundLogin();
+        serveStdio(() => createServer(undefined, loginFlow));
+      }
       return;
 
     case "version":

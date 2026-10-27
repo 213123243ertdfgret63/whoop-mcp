@@ -43,13 +43,13 @@ const negotiated = (client: Client) =>
 
 for (const [label, options, expectedVersion] of eras) {
   describe(`stdio server, ${label}`, () => {
-    test("lists the tools with read-only annotations", async () => {
+    test("lists the tools; everything except whoop_login is read-only", async () => {
       const client = await connect([process.execPath, "run", ENTRY], options);
       try {
         expect(negotiated(client)).toBe(expectedVersion);
         const { tools } = await client.listTools();
-        expect(tools.map((t) => t.name).sort()).toEqual(["whoop_profile", "whoop_status"]);
-        for (const t of tools) expect(t.annotations?.readOnlyHint).toBe(true);
+        expect(tools.map((t) => t.name).sort()).toEqual(["whoop_login", "whoop_profile", "whoop_status"]);
+        for (const t of tools) expect(t.annotations?.readOnlyHint).toBe(t.name !== "whoop_login");
       } finally {
         await client.close();
       }
@@ -107,7 +107,18 @@ test.skipIf(!binary)("compiled binary serves stdio", async () => {
   const client = await connect([binary!]);
   try {
     const { tools } = await client.listTools();
-    expect(tools.length).toBe(2);
+    expect(tools.length).toBe(3);
+  } finally {
+    await client.close();
+  }
+});
+
+test("the committed plugin bundle serves stdio with only bun (no node_modules next to it)", async () => {
+  const bundle = join(import.meta.dir, "..", "plugin", "server", "whoop-mcp.js");
+  const client = await connect([process.execPath, bundle]);
+  try {
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual(["whoop_login", "whoop_profile", "whoop_status"]);
   } finally {
     await client.close();
   }

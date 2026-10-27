@@ -1,3 +1,8 @@
 # Format, lint and organize imports on staged files; unfixable lint errors block the commit.
 # Afterwards, re-stage whatever Biome fixed (this stages the whole file, including any unstaged hunks in it).
 bunx biome check --write --staged --no-errors-on-unmatched && git update-index --again
+
+# Keep the committed Claude Code plugin bundle in sync with the source (CI fails on a stale bundle).
+if git diff --cached --name-only | grep -qE '^(src/|package\.json$|bun\.lock$)'; then
+  bun run build:plugin >/dev/null && git add plugin/server/whoop-mcp.js
+fi

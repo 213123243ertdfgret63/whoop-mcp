@@ -6,7 +6,28 @@ An MCP server for the [WHOOP Developer API](https://developer.whoop.com) (v2), b
 
 Not affiliated with or endorsed by WHOOP. Nothing it returns is medical advice.
 
-## Setup
+## Install as a Claude Code plugin
+
+Needs [Bun](https://bun.sh) 1.4+ on your PATH and read access to this (private) repo through your git credentials (for example `gh auth login` followed by `gh auth setup-git`). In Claude Code:
+
+```text
+/plugin marketplace add 213123243ertdfgret63/whoop-mcp
+/plugin install whoop@whoop-mcp
+```
+
+Or in one step on Claude Code 2.1.275 or later:
+
+```text
+/plugin install whoop --marketplace 213123243ertdfgret63/whoop-mcp
+```
+
+The install dialog asks for your WHOOP app's **Client ID** and **Client Secret** (the secret goes to your system keychain). If you don't have an app yet, create one at <https://developer-dashboard.whoop.com> with the redirect URI `http://localhost:8787/callback` and the read scopes. Then ask Claude to "set up WHOOP", or run `/whoop:setup`: it checks the configuration and calls the `whoop_login` tool, which opens WHOOP in your browser to approve access. No terminal needed.
+
+- Change credentials later with `/plugin configure whoop@whoop-mcp`, then `/reload-plugins`.
+- Tokens live in Claude Code's data folder for the plugin, so they survive updates and are deleted when you uninstall it.
+- **Updates:** plugin users get a new version when a release bumps it. Run `/plugin marketplace update whoop-mcp` (or turn on auto-update for the marketplace under `/plugin` → Marketplaces), then `/reload-plugins`.
+
+## Setup (from source)
 
 1. Install [Bun](https://bun.sh) 1.4 or later, then run `bun install`.
 2. Run `bun run setup`. The wizard:
@@ -87,17 +108,18 @@ From a clean `main` that's in sync with `origin`, this runs lint, typecheck and 
 
 ## Development
 
-| Command                                                 | What it does                                                                                      |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `bun test`                                              | Test suite (includes stdio smoke tests covering both MCP protocol eras)                           |
-| `bun run typecheck`                                     | `tsc --noEmit`                                                                                    |
-| `bun run lint` / `bun run format`                       | Biome check / Biome check with fixes applied                                                      |
-| `bun run inspect`                                       | Opens MCP Inspector against the server                                                            |
-| `bun run spec:update`                                   | Refreshes `openapi/whoop.yaml` from WHOOP's published spec (review with `git diff openapi/`)      |
-| `bun run gen:types`                                     | Generates `src/whoop/openapi.d.ts` from `openapi/whoop.yaml`; runs automatically on `bun install` |
-| `bun run release <patch\|minor\|major>`                 | Cuts a release (see [Cutting a release](#cutting-a-release))                                      |
-| `bun run build`                                         | Builds a single-file binary at `dist/whoop-mcp`                                                   |
-| `bun scripts/m0-probe.ts <public\|login\|refresh\|api>` | The M0 verification probes (see `docs/verification.md`)                                           |
+| Command                                                 | What it does                                                                                                                         |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `bun test`                                              | Test suite (includes stdio smoke tests covering both MCP protocol eras)                                                              |
+| `bun run typecheck`                                     | `tsc --noEmit`                                                                                                                       |
+| `bun run lint` / `bun run format`                       | Biome check / Biome check with fixes applied                                                                                         |
+| `bun run inspect`                                       | Opens MCP Inspector against the server                                                                                               |
+| `bun run spec:update`                                   | Refreshes `openapi/whoop.yaml` from WHOOP's published spec (review with `git diff openapi/`)                                         |
+| `bun run gen:types`                                     | Generates `src/whoop/openapi.d.ts` from `openapi/whoop.yaml`; runs automatically on `bun install`                                    |
+| `bun run release <patch\|minor\|major>`                 | Cuts a release (see [Cutting a release](#cutting-a-release))                                                                         |
+| `bun run build:plugin`                                  | Rebuilds the plugin bundle `plugin/server/whoop-mcp.js` (the pre-commit hook does this when `src/` changes; CI fails if it is stale) |
+| `bun run build`                                         | Builds a single-file binary at `dist/whoop-mcp`                                                                                      |
+| `bun scripts/m0-probe.ts <public\|login\|refresh\|api>` | The M0 verification probes (see `docs/verification.md`)                                                                              |
 
 CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests and a compiled-binary smoke test on Ubuntu and macOS for every push to `main` and every pull request. The Bun version comes from `.bun-version`.
 

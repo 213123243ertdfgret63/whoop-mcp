@@ -37,16 +37,25 @@ export class ConfigError extends Error {
   override name = "ConfigError";
 }
 
+/**
+ * A trimmed env value, or undefined when blank or an unexpanded `${...}` placeholder (e.g. a plugin's
+ * `${user_config.client_id}` that was never filled in), so it can't masquerade as a real credential.
+ */
+export function envValue(value: string | undefined): string | undefined {
+  const v = value?.trim();
+  return v && !/^\$\{[^}]*\}$/.test(v) ? v : undefined;
+}
+
 /** Each user brings their own WHOOP developer app (ToU §3.2.1: no developer credentials in source). */
 export function loadClientCredentials(env = process.env): ClientCredentials {
-  const clientId = env.WHOOP_CLIENT_ID?.trim();
-  const clientSecret = env.WHOOP_CLIENT_SECRET?.trim();
+  const clientId = envValue(env.WHOOP_CLIENT_ID);
+  const clientSecret = envValue(env.WHOOP_CLIENT_SECRET);
   if (!clientId || !clientSecret) {
     throw new ConfigError(
       "WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET must be set (create an app at https://developer-dashboard.whoop.com).",
     );
   }
-  return { clientId, clientSecret, redirectUri: env.WHOOP_REDIRECT_URI?.trim() || DEFAULT_REDIRECT_URI };
+  return { clientId, clientSecret, redirectUri: envValue(env.WHOOP_REDIRECT_URI) ?? DEFAULT_REDIRECT_URI };
 }
 
 export function configDir(env = process.env): string {
