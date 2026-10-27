@@ -39,9 +39,17 @@ On Windows, download `whoop-mcp-windows-x64.exe` from the [latest release](https
 
 Ask Claude to **"connect WHOOP"**. It calls the `whoop_login` tool, which opens a page in your browser:
 
-1. **First time:** a setup page explains how to create a free app at the [WHOOP developer dashboard](https://developer-dashboard.whoop.com):
-   - Set its redirect URI to `http://localhost:8787/callback`.
-   - Turn on the read scopes.
+1. **First time:** a setup page walks you through creating a free app at the [WHOOP developer dashboard](https://developer-dashboard.whoop.com). It tells you what to put in each field of WHOOP's form:
+
+   | Field          | Value                                                                          |
+   | -------------- | ------------------------------------------------------------------------------ |
+   | Name           | anything, for example `whoop-mcp`                                              |
+   | Logo           | leave empty                                                                    |
+   | Contacts       | your own email address                                                         |
+   | Privacy policy | `https://github.com/213123243ertdfgret63/whoop-mcp#connect-your-whoop-account` |
+   | Redirect URLs  | `http://localhost:8787/callback` (exactly)                                     |
+   | Scopes         | tick all six                                                                   |
+   | Webhooks       | leave empty                                                                    |
 
    It then asks for the app's Client ID and Client Secret. It checks them with WHOOP (if WHOOP can't be reached, it saves them anyway) and saves them to your system keychain.
 2. **Then:** it continues to WHOOP's consent screen. Approve access, tell Claude you're done, and it confirms with `whoop_status`.

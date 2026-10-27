@@ -6,6 +6,8 @@ import type { PromptIO } from "./cli/terminal.ts";
 import { type ClientCredentials, DEFAULT_REDIRECT_URI, SCOPES, WHOOP } from "./config.ts";
 
 export const DASHBOARD_URL = "https://developer-dashboard.whoop.com";
+// WHOOP's app form requires a privacy policy URL; the README explains that data stays on this computer.
+export const PRIVACY_URL = "https://github.com/213123243ertdfgret63/whoop-mcp#connect-your-whoop-account";
 const MAX_ATTEMPTS = 3;
 
 export type VerifyResult = { ok: true } | { ok: false; reason: string } | { ok: "unknown"; reason: string };
@@ -89,10 +91,16 @@ export async function runSetup(io: PromptIO, opts: SetupOptions): Promise<SetupR
       [
         "whoop-mcp connects to WHOOP through your own (free) WHOOP developer app.",
         "",
-        `1. Open ${DASHBOARD_URL} and create an app.`,
-        `2. Add this redirect URI exactly: ${redirectUri}`,
-        `3. Enable the scopes: ${SCOPES.filter((s) => s !== "offline").join(", ")}`,
-        "4. Copy the app's Client ID and Client Secret below.",
+        `1. Open ${DASHBOARD_URL}, sign in and click Create App. Fill in the form:`,
+        "   Name:           anything, for example whoop-mcp",
+        "   Logo:           leave empty",
+        "   Contacts:       your own email address",
+        `   Privacy policy: ${PRIVACY_URL}`,
+        `   Redirect URLs:  ${redirectUri}   (exactly this)`,
+        `   Scopes:         tick all six (${SCOPES.filter((s) => s !== "offline").join(", ")})`,
+        "   Webhooks:       leave empty",
+        "   Then click Create App.",
+        "2. Copy the app's Client ID and Client Secret below.",
         "",
       ].join("\n"),
     );

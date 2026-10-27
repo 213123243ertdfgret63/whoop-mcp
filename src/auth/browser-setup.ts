@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { openUrl } from "../cli/terminal.ts";
 import { type ClientCredentials, SCOPES } from "../config.ts";
 import { log } from "../log.ts";
-import { DASHBOARD_URL, type VerifyResult, verifyCredentials } from "../setup.ts";
+import { DASHBOARD_URL, PRIVACY_URL, type VerifyResult, verifyCredentials } from "../setup.ts";
 import { type CredentialSource, saveCredentials } from "./credentials.ts";
 import { listenLocal, oauthCallback, PAGE_HEADERS, page, parseRedirect } from "./login.ts";
 import { buildAuthorizeUrl, exchangeCode, randomState, randomToken, type TokenResponse } from "./oauth.ts";
@@ -18,6 +18,7 @@ import { buildAuthorizeUrl, exchangeCode, randomState, randomToken, type TokenRe
  */
 export const SETUP_PATH = "/setup";
 const MAX_BODY_BYTES = 8 * 1024;
+const CREATE_URL = `${DASHBOARD_URL}/apps/create`;
 
 export interface BrowserSetupOptions {
   redirectUri: string;
@@ -73,21 +74,46 @@ function formPage(opts: { token: string; redirectUri: string; clientId?: string;
   ol { padding-left: 1.25rem; } li { margin: .35rem 0; }
   code { background: var(--card); padding: .1rem .35rem; border-radius: 4px; font-size: .9em; white-space: nowrap; }
   code.uri { white-space: normal; overflow-wrap: anywhere; }
-  form { background: var(--card); padding: 1.25rem; border-radius: 10px; margin-top: 1.5rem; }
+  form { background: var(--card); padding: 1.25rem; border-radius: 10px; margin-top: 1rem; }
   label { display: block; font-weight: 600; margin: .75rem 0 .25rem; }
   input { width: 100%; box-sizing: border-box; font: inherit; padding: .55rem .65rem; border: 1px solid #8884; border-radius: 6px; background: var(--bg); color: var(--fg); }
   button { margin-top: 1.25rem; font: inherit; font-weight: 600; padding: .6rem 1.1rem; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
   .error { color: var(--err); font-weight: 600; } .note { color: var(--muted); font-size: .9rem; }
+  h2 { font-size: 1.1rem; margin: 1.75rem 0 .5rem; }
+  dl { background: var(--card); border-radius: 10px; padding: .5rem 1.25rem 1rem; }
+  dt { font-weight: 600; margin-top: .75rem; } dd { margin: .15rem 0 0; }
+  dl code { background: var(--bg); }
+  code.copy { user-select: all; -webkit-user-select: all; cursor: pointer; white-space: normal; overflow-wrap: anywhere; }
 </style></head>
 <body>
 <h1>Connect WHOOP</h1>
-<p class="lead">whoop-mcp reads your WHOOP data through your own free WHOOP developer app.</p>
-<ol>
-  <li>Open the <a href="${esc(DASHBOARD_URL)}" target="_blank" rel="noopener noreferrer">WHOOP developer dashboard</a> and create an app.</li>
-  <li>Set its redirect URI to exactly <code class="uri">${esc(opts.redirectUri)}</code></li>
-  <li>Enable the scopes ${scopes}.</li>
-  <li>Paste the app's Client ID and Client Secret below.</li>
-</ol>
+<p class="lead">whoop-mcp reads your WHOOP data through your own free WHOOP developer app. Creating one takes
+about two minutes.</p>
+<h2>1. Create the app</h2>
+<p>Open the <a href="${esc(CREATE_URL)}" target="_blank" rel="noopener noreferrer">WHOOP developer dashboard</a>,
+sign in with your WHOOP account and click <b>Create App</b>. Fill in the form like this (click a value to select
+it, then copy it):</p>
+<dl>
+  <dt>Name</dt>
+  <dd>Anything you like, for example <code class="copy">whoop-mcp</code>. WHOOP shows it when you approve access.</dd>
+  <dt>Logo</dt>
+  <dd>Leave it empty.</dd>
+  <dt>Contacts</dt>
+  <dd>Your own email address. WHOOP only uses it for notices about the app.</dd>
+  <dt>Privacy policy</dt>
+  <dd><code class="copy">${esc(PRIVACY_URL)}</code><br><span class="note">whoop-mcp keeps your data on this
+  computer; that page says so.</span></dd>
+  <dt>Redirect URLs</dt>
+  <dd><code class="copy">${esc(opts.redirectUri)}</code><br><span class="note">Exactly this, or WHOOP refuses to
+  log you in.</span></dd>
+  <dt>Scopes</dt>
+  <dd>Tick all six: ${scopes}.</dd>
+  <dt>Webhooks</dt>
+  <dd>Leave it empty.</dd>
+</dl>
+<p>Then click <b>Create App</b> at the bottom of the form.</p>
+<h2>2. Paste the app's credentials</h2>
+<p>WHOOP shows the new app's <b>Client ID</b> and <b>Client Secret</b>. Copy both into the form below.</p>
 <form method="post" action="${SETUP_PATH}" autocomplete="off">
   ${opts.error ? `<p class="error" role="alert">${esc(opts.error)}</p>` : ""}
   <input type="hidden" name="token" value="${esc(opts.token)}">

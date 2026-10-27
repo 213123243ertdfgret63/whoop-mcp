@@ -75,7 +75,7 @@ describe("runSetup", () => {
     const stored = await readStoredCredentials();
     expect(stored?.creds).toMatchObject({ clientId: "my-id", clientSecret: "my-secret" });
     expect(logins).toEqual([stored!.creds]);
-    expect(log.printed.join("\n")).toContain("redirect URI exactly: http://localhost:8787/callback");
+    expect(log.printed.join("\n")).toContain("Redirect URLs:  http://localhost:8787/callback");
   });
 
   test("asks for the secret through the hidden prompt, never the echoing one", async () => {
