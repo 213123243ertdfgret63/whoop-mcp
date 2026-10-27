@@ -1,7 +1,9 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 
-export const VERSION = "0.0.1";
+/** package.json is the single source of truth; `bun run release` bumps it. Inlined into compiled binaries. */
+export const VERSION: string = pkg.version;
 
 export const WHOOP = {
   apiBase: "https://api.prod.whoop.com/developer",

@@ -44,7 +44,7 @@ If the status is **CURRENT**, don't report it. Carry on with the task.
 The script lists the pins it found:
 - **Runtime:** `engines.bun`, `packageManager`, `.bun-version`, `.tool-versions`, `mise.toml`
 - **Types:** `@types/bun` / `bun-types` (the resolved installed version)
-- **CI:** `setup-bun` `bun-version`
+- **CI:** `setup-bun` `bun-version`, or `bun-version-file` (resolved from the file it names)
 - **Containers:** `FROM oven/bun:<tag>`
 
 Raise the issues it reports:

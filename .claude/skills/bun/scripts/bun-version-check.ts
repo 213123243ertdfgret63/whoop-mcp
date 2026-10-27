@@ -152,6 +152,18 @@ function readText(path: string): string | null {
   }
 }
 
+/** The Bun version a setup-bun `bun-version-file` points at (.bun-version, .tool-versions or package.json). */
+function versionFromFile(path: string): string | null {
+  const text = readText(path);
+  if (!text) return null;
+  if (path.endsWith("package.json")) {
+    const pkg = JSON.parse(text) as { packageManager?: string; engines?: Record<string, string> };
+    return pkg.packageManager?.startsWith("bun@") ? pkg.packageManager.slice(4) : (pkg.engines?.bun ?? null);
+  }
+  if (path.endsWith(".tool-versions")) return text.match(/^bun\s+(\S+)/m)?.[1] ?? null;
+  return text.trim() || null;
+}
+
 function projectPins(): Pin[] {
   const pins: Pin[] = [];
   const add = (source: string, value: string, kind: Pin["kind"]) =>
@@ -209,7 +221,13 @@ function projectPins(): Pin[] {
       const text = readText(join(wfDir, f)) ?? "";
       if (!text.includes("setup-bun")) continue;
       const m = text.match(/bun-version:\s*['"]?([^'"\s#]+)/);
-      add(join(wfDir, f), m ? `setup-bun bun-version: ${m[1]}` : "setup-bun (no bun-version → latest)", "ci");
+      const fileRef = text.match(/bun-version-file:\s*['"]?([^'"\s#]+)/)?.[1];
+      if (m) add(join(wfDir, f), `setup-bun bun-version: ${m[1]}`, "ci");
+      else if (fileRef) {
+        // setup-bun reads the version from a file; resolve it so CI is compared like any other pin.
+        const resolved = versionFromFile(join(cwd, fileRef));
+        add(join(wfDir, f), `setup-bun bun-version: ${resolved ?? "?"} (from ${fileRef})`, "ci");
+      } else add(join(wfDir, f), "setup-bun (no bun-version → latest)", "ci");
     }
   }
   return pins;
@@ -241,7 +259,7 @@ const missed = await Promise.all(
 
 /** An exact pin (bun@1.3.0, oven/bun:1.3.0-alpine, 1.3.0) as opposed to a range (^1.3.0, >=1.3, latest). */
 const isExactPin = (value: string) =>
-  /^(bun@|oven\/bun:|setup-bun bun-version: )?v?\d+\.\d+\.\d+(-[a-z]+)?$/i.test(value);
+  /^(bun@|oven\/bun:|setup-bun bun-version: )?v?\d+\.\d+\.\d+(-[a-z]+)?( \(from [^)]+\))?$/i.test(value);
 
 const pins = projectPins();
 const pinIssues = pins.flatMap((p) => {

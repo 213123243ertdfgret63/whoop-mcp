@@ -1,0 +1,92 @@
+name: Release
+
+# Triggered by the tag that `bun run release <patch|minor|major>` creates.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+
+env:
+  HUSKY: "0"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history for the main-ancestry check; don't leave the write token in .git/config
+          # for install scripts and tests to read (gh gets it via GH_TOKEN in the publish step).
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - run: bun install --frozen-lockfile
+
+      - name: Check the tag matches package.json
+        run: |
+          version="v$(bun -p 'require("./package.json").version')"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+
+      - name: Check the tagged commit is on main
+        # fetch-depth: 0 already fetched origin/main (no extra fetch: the token isn't persisted).
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME points at a commit that isn't on main; refusing to release it"
+            exit 1
+          fi
+
+      - name: Lint, typecheck and test
+        run: |
+          bunx biome ci .
+          bun run typecheck
+          bun test
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64 windows-x64; do
+            ext=""; [ "$target" = "windows-x64" ] && ext=".exe"
+            bun build src/index.ts --compile --minify \
+              --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
+              --target="bun-$target" --outfile "dist/whoop-mcp-$target$ext"
+          done
+          ./dist/whoop-mcp-linux-x64 --version
+          (cd dist && sha256sum whoop-mcp-* > SHA256SUMS)
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          bun -e '
+            import { releaseNotes } from "./scripts/release.ts";
+            const version = process.env.GITHUB_REF_NAME.slice(1);
+            const notes = releaseNotes(await Bun.file("CHANGELOG.md").text(), version);
+            if (!notes) throw new Error(`CHANGELOG.md has no section for v${version}`);
+            await Bun.write("dist/NOTES.md", notes);
+          '
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Re-runs (e.g. after a failed upload) replace the assets instead of failing on the existing release.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --clobber dist/whoop-mcp-* dist/SHA256SUMS
+            gh release edit "$GITHUB_REF_NAME" --notes-file dist/NOTES.md --draft=false
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file dist/NOTES.md \
+              --verify-tag \
+              dist/whoop-mcp-* dist/SHA256SUMS
+          fi

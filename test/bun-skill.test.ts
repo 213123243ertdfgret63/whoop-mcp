@@ -263,6 +263,25 @@ describe("bun-version-check.ts", () => {
     ]);
   });
 
+  test("resolves setup-bun's bun-version-file instead of treating CI as unpinned", async () => {
+    await fakeBun("1.4.4");
+    await seedReleases(["1.4.5", "1.4.4"], { "1.4.5": null });
+    await put(join(project, ".bun-version"), "1.4.4\n");
+    await put(
+      join(project, ".github", "workflows", "ci.yml"),
+      "steps:\n  - uses: oven-sh/setup-bun@v2\n    with:\n      bun-version-file: .bun-version\n",
+    );
+    const r = await report();
+    const ci = r.project.pins.find((p) => p.kind === "ci");
+    expect(ci?.value).toBe("setup-bun bun-version: 1.4.4 (from .bun-version)");
+    expect(ci?.version).toEqual([1, 4, 4]);
+    // Same pin as local: no "CI tracks latest" false alarm; both pins are just older than latest.
+    expect(r.project.issues.some((i) => i.includes("resolves to"))).toBe(false);
+    expect(r.project.issues).toContain(
+      ".github/workflows/ci.yml: pins setup-bun bun-version: 1.4.4 (from .bun-version), older than the latest 1.4.5",
+    );
+  });
+
   test("does not warn about an unversioned setup-bun when the local Bun is current", async () => {
     await fakeBun("1.4.5");
     await seedReleases(["1.4.5", "1.4.4"]);

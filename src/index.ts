@@ -3,6 +3,8 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { deleteStoredCredentials, readStoredCredentials, resolveClientCredentials } from "./auth/credentials.ts";
 import { deleteTokens, readTokens, tokenPath } from "./auth/store.ts";
 import { terminalIO } from "./cli/terminal.ts";
+import { VERSION } from "./config.ts";
+import { log } from "./log.ts";
 import { createServer } from "./server.ts";
 import { loginAndSave, runSetup } from "./setup.ts";
 
@@ -10,7 +12,9 @@ const [command = "serve", ...rest] = process.argv.slice(2);
 const flag = (name: string) => rest.includes(name);
 const print = (text: string) => console.error(text);
 
-const USAGE = `Usage: whoop-mcp <command>
+const USAGE = `whoop-mcp v${VERSION}
+
+Usage: whoop-mcp <command>
 
   serve                 Run the MCP server over stdio (default)
   setup                 Save your WHOOP app credentials, then log in with the browser
@@ -19,12 +23,21 @@ const USAGE = `Usage: whoop-mcp <command>
       --skip-verify       Don't check the credentials with WHOOP before saving
   login [--no-browser]  Log in with the browser using the saved credentials
   status                Show credential and login state
-  logout [--forget-app] Delete saved tokens (and, with --forget-app, the app credentials)`;
+  logout [--forget-app] Delete saved tokens (and, with --forget-app, the app credentials)
+  version               Print the version`;
 
 async function main(): Promise<void> {
   switch (command) {
     case "serve":
+      // Goes to the client's MCP log (stderr), so you can tell which build a client is running.
+      log(`v${VERSION} starting (stdio)`);
       serveStdio(() => createServer());
+      return;
+
+    case "version":
+    case "--version":
+    case "-v":
+      console.log(VERSION);
       return;
 
     case "setup":

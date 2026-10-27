@@ -35,6 +35,56 @@ For Claude Desktop, add the following to `claude_desktop_config.json`. Use absol
 }
 ```
 
+## Versions and updating
+
+The server logs `vX.Y.Z starting` to the client's MCP log, and the `whoop_status` tool reports `server_version`, so you can see which build a client is actually running. To print it yourself, run `bun run /path/to/whoop/src/index.ts --version` (from source) or `./whoop-mcp-<platform> --version` (binary). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
+To see the latest release (the repo is private, so this uses your `gh` login):
+
+```bash
+gh release view --repo 213123243ertdfgret63/whoop-mcp --json tagName,publishedAt
+```
+
+After updating, restart the MCP client (quit and reopen Claude Desktop, or `/mcp` → reconnect in Claude Code): stdio servers are started once and keep running the old code.
+
+**From source.** Pull and reinstall; `bun install` also regenerates the API types:
+
+```bash
+git pull && bun install
+```
+
+`main` can be ahead of the last release, and the version shown only changes when a release is cut. To run exactly a released version instead, check out its tag: `git fetch --tags && git checkout v0.1.0 && bun install`.
+
+**Prebuilt binary.** Download your platform's binary and the checksums from the latest [GitHub release](../../releases/latest), or with `gh`:
+
+```bash
+gh release download --repo 213123243ertdfgret63/whoop-mcp -p 'whoop-mcp-darwin-arm64' -p SHA256SUMS
+shasum -a 256 -c SHA256SUMS --ignore-missing
+chmod +x whoop-mcp-darwin-arm64
+xattr -d com.apple.quarantine whoop-mcp-darwin-arm64 2>/dev/null || true  # only set on browser downloads
+```
+
+Downloads aren't executable until you `chmod +x` them, and the macOS binaries aren't notarized, hence the `xattr` line. Replace the old file, or point the client at the binary:
+
+```json
+{
+  "mcpServers": {
+    "whoop": { "command": "/absolute/path/to/whoop-mcp-darwin-arm64" }
+  }
+}
+```
+
+The first time a new binary reads the saved credentials, macOS may ask to allow Keychain access. Saved credentials and tokens live outside the install, so they survive updates.
+
+### Cutting a release
+
+```bash
+bun run release patch --dry-run   # preview the version bump and changelog
+bun run release patch --push      # or minor / major / x.y.z
+```
+
+From a clean `main` that's in sync with `origin`, this runs lint, typecheck and tests, bumps `package.json`, prepends `CHANGELOG.md` with the commits since the last tag, then commits and tags `vX.Y.Z` (rolling both back if anything fails). `--push` pushes `main` and the tag atomically. Pushing the tag runs `.github/workflows/release.yml`, which checks the tag matches `package.json` and is on `main`, reruns the checks, cross-compiles binaries for macOS, Linux and Windows, and publishes a GitHub release with checksums and the changelog notes.
+
 ## Development
 
 | Command                                                 | What it does                                                                                      |
@@ -45,7 +95,10 @@ For Claude Desktop, add the following to `claude_desktop_config.json`. Use absol
 | `bun run inspect`                                       | Opens MCP Inspector against the server                                                            |
 | `bun run spec:update`                                   | Refreshes `openapi/whoop.yaml` from WHOOP's published spec (review with `git diff openapi/`)      |
 | `bun run gen:types`                                     | Generates `src/whoop/openapi.d.ts` from `openapi/whoop.yaml`; runs automatically on `bun install` |
+| `bun run release <patch\|minor\|major>`                 | Cuts a release (see [Cutting a release](#cutting-a-release))                                      |
 | `bun run build`                                         | Builds a single-file binary at `dist/whoop-mcp`                                                   |
 | `bun scripts/m0-probe.ts <public\|login\|refresh\|api>` | The M0 verification probes (see `docs/verification.md`)                                           |
+
+CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests and a compiled-binary smoke test on Ubuntu and macOS for every push to `main` and every pull request. The Bun version comes from `.bun-version`.
 
 A Husky pre-commit hook runs Biome on staged files, applying formatting and safe fixes; lint errors it can't fix block the commit.

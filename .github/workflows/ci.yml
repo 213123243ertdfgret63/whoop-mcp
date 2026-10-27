@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded PR runs are cancelled; every push to main keeps its own result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      # Skip installing git hooks on CI runners.
+      HUSKY: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      # `prepare` also generates src/whoop/openapi.d.ts from openapi/whoop.yaml.
+      - run: bun install --frozen-lockfile
+
+      - name: Lint and format check
+        if: runner.os == 'Linux'
+        run: bunx biome ci .
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+      - name: Build binary
+        run: bun run build
+
+      - name: Smoke-test the compiled binary
+        run: bun test test/smoke.test.ts -t "compiled binary"
+        env:
+          WHOOP_MCP_BINARY: dist/whoop-mcp
