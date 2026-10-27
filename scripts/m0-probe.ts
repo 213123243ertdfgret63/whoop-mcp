@@ -4,13 +4,17 @@
  * Results (never tokens) are appended to docs/m0-results.json; transcribe conclusions into docs/verification.md.
  *
  *   bun scripts/m0-probe.ts public                       # no credentials needed
- *   bun scripts/m0-probe.ts login [--pkce] [--state-len 8] [--auth basic|body]
- *   bun scripts/m0-probe.ts refresh [--auth basic|body] [--no-offline-scope] [--probe-reuse]
+ *   bun scripts/m0-probe.ts login [--pkce] [--state-len 8] [--auth basic|body|none]
+ *   bun scripts/m0-probe.ts login --public              # public client: PKCE, no client secret sent
+ *   bun scripts/m0-probe.ts refresh [--auth basic|body|none] [--no-offline-scope] [--probe-reuse]
+ *
+ * App credentials come from `whoop-mcp setup` (keychain/file) or WHOOP_CLIENT_ID/WHOOP_CLIENT_SECRET.
  *   bun scripts/m0-probe.ts api                          # hits each v2 read endpoint once
  */
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { resolveClientCredentials } from "../src/auth/credentials.ts";
 import { login } from "../src/auth/login.ts";
 import {
   type ClientAuthMethod,
@@ -20,7 +24,7 @@ import {
   toStored,
 } from "../src/auth/oauth.ts";
 import { readTokens, writeTokens } from "../src/auth/store.ts";
-import { loadClientCredentials, WHOOP } from "../src/config.ts";
+import { WHOOP } from "../src/config.ts";
 
 const RESULTS = join(import.meta.dir, "..", "docs", "m0-results.json");
 
@@ -29,13 +33,18 @@ const { positionals, values } = parseArgs({
   allowPositionals: true,
   options: {
     pkce: { type: "boolean", default: false },
+    public: { type: "boolean", default: false },
     "state-len": { type: "string" },
     auth: { type: "string", default: "body" },
     "no-offline-scope": { type: "boolean", default: false },
     "probe-reuse": { type: "boolean", default: false },
   },
 });
-const auth = values.auth as ClientAuthMethod;
+if (!["body", "basic", "none"].includes(values.auth ?? "")) throw new Error(`--auth must be body, basic or none`);
+// --public is the "no secret in the binary" route: a public client authenticated only by PKCE.
+const auth = (values.public ? "none" : values.auth) as ClientAuthMethod;
+const pkce = values.public || values.pkce;
+const loadCreds = async () => (await resolveClientCredentials()).creds;
 
 async function record(probe: string, result: Record<string, unknown>): Promise<void> {
   const entry = { probe, at: new Date().toISOString(), ...result };
@@ -67,7 +76,7 @@ async function profileStatus(accessToken: string): Promise<number> {
 
 async function tryRefresh(refreshToken: string, opts: Parameters<typeof refreshTokens>[2]) {
   try {
-    return { ok: true as const, tokens: await refreshTokens(loadClientCredentials(), refreshToken, opts) };
+    return { ok: true as const, tokens: await refreshTokens(await loadCreds(), refreshToken, opts) };
   } catch (err) {
     if (err instanceof OAuthHttpError) return { ok: false as const, status: err.status, body: err.body.slice(0, 500) };
     throw err;
@@ -108,15 +117,16 @@ async function probePublic(): Promise<void> {
 }
 
 async function probeLogin(): Promise<void> {
-  const creds = loadClientCredentials();
+  const creds = await loadCreds();
   const stateLength = values["state-len"] ? Number(values["state-len"]) : 32;
   try {
-    const { tokens, callbackParams } = await login(creds, { pkce: values.pkce, stateLength, auth });
+    const { tokens, callbackParams } = await login(creds, { pkce, stateLength, auth });
     await writeTokens(toStored(tokens));
     await record("login", {
       ok: true,
       redirect_uri: creds.redirectUri,
-      pkce: values.pkce,
+      pkce,
+      public_client: values.public,
       state_length: stateLength,
       client_auth: auth,
       callback_params: Object.keys(callbackParams),
@@ -127,7 +137,8 @@ async function probeLogin(): Promise<void> {
     await record("login", {
       ok: false,
       redirect_uri: creds.redirectUri,
-      pkce: values.pkce,
+      pkce,
+      public_client: values.public,
       state_length: stateLength,
       client_auth: auth,
       error: err instanceof Error ? err.message : String(err),

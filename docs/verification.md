@@ -32,7 +32,7 @@ Set up first:
 - Create an app at <https://developer-dashboard.whoop.com>.
 - Register the redirect URI `http://localhost:8787/callback`.
 - Select every read scope.
-- Put the client ID and secret in `.env`, copied from `.env.example`.
+- Run `bun run setup -- --no-login` to save the client ID and secret (or put them in `.env`).
 
 | #     | Command                                                                                            | Answers                                                                                                                                 |
 | ----- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
@@ -40,6 +40,7 @@ Set up first:
 | 2     | `bun scripts/m0-probe.ts login` (32-character `state`) and, if that fails, `--state-len 8`         | Whether `state` longer than 8 characters is accepted ⏳                                                                                 |
 | 3     | `login --auth basic`, after which the default `body` path will already have run                    | Which client authentication method works ⏳                                                                                             |
 | 4     | `login --pkce`                                                                                     | Whether PKCE with the secret is accepted ⏳                                                                                             |
+| 4b    | `login --public`, then `refresh --auth none`: PKCE with **no client secret** sent                  | Whether WHOOP accepts a public client, which would allow shipping one client ID with no secret (no developer app per user) ⏳           |
 | 6     | Look at `token.expires_in` and `has_refresh_token` in the login output                             | Access-token lifetime, and whether `offline` returns a refresh token ⏳                                                                 |
 | 8     | Look at `token.has_id_token`                                                                       | Whether `openid` returns an id_token ⏳                                                                                                 |
 | 5     | `refresh`, then `refresh --no-offline-scope`                                                       | Whether `scope=offline` is needed on refresh, and whether the refresh token rotates ⏳                                                  |

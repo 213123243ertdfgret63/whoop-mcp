@@ -1,3 +1,4 @@
+import { openUrl } from "../cli/terminal.ts";
 import type { ClientCredentials } from "../config.ts";
 import { log } from "../log.ts";
 import {
@@ -91,14 +92,7 @@ export async function login(creds: ClientCredentials, opts: LoginOptions = {}): 
   );
 
   log(`Open this URL to authorize WHOOP access:\n\n  ${authorizeUrl}\n`);
-  if (opts.openBrowser ?? true) {
-    const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
-    try {
-      Bun.spawn([opener, authorizeUrl], { stdout: "ignore", stderr: "ignore" });
-    } catch {
-      // The URL is printed above; opening a browser is best-effort.
-    }
-  }
+  if (opts.openBrowser ?? true) openUrl(authorizeUrl);
 
   try {
     const { code, params } = await deferred.promise;

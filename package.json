@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "bun run src/index.ts",
+    "setup": "bun run src/index.ts setup",
     "login": "bun run src/index.ts login",
     "status": "bun run src/index.ts status",
     "test": "bun test",

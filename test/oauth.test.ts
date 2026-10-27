@@ -187,6 +187,26 @@ describe("exchangeCode", () => {
   });
 });
 
+describe("public client (auth: none)", () => {
+  test("code exchange sends the client id and PKCE verifier but never the secret", async () => {
+    await exchangeCode(creds, "c", { auth: "none", codeVerifier: "v".repeat(43) });
+    const call = onlyCall();
+    expect(call.body.get("client_id")).toBe(creds.clientId);
+    expect(call.body.get("code_verifier")).toBe("v".repeat(43));
+    expect(call.body.has("client_secret")).toBe(false);
+    expect(call.headers.has("authorization")).toBe(false);
+    expect(call.body.toString()).not.toContain(encodeURIComponent(creds.clientSecret));
+  });
+
+  test("refresh sends the client id without the secret", async () => {
+    await refreshTokens(creds, "rt", { auth: "none" });
+    const call = onlyCall();
+    expect(call.body.get("client_id")).toBe(creds.clientId);
+    expect(call.body.has("client_secret")).toBe(false);
+    expect(call.headers.has("authorization")).toBe(false);
+  });
+});
+
 describe("refreshTokens", () => {
   test("POSTs a refresh_token grant with scope=offline by default", async () => {
     await refreshTokens(creds, "old-rt");

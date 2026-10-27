@@ -9,11 +9,12 @@ Not affiliated with or endorsed by WHOOP. Nothing it returns is medical advice.
 ## Setup
 
 1. Install [Bun](https://bun.sh) 1.4 or later, then run `bun install`.
-2. Create a WHOOP developer app at <https://developer-dashboard.whoop.com>:
-   - Set the redirect URI to `http://localhost:8787/callback`.
-   - Turn on these scopes: `read:profile`, `read:body_measurement`, `read:cycles`, `read:recovery`, `read:sleep`, `read:workout`. The `offline` scope is requested automatically.
-3. Copy `.env.example` to `.env` and fill in `WHOOP_CLIENT_ID` and `WHOOP_CLIENT_SECRET`.
-4. Run `bun run login` to authorize in your browser. Tokens are saved to `~/.config/whoop-mcp/tokens.json` with mode 0600.
+2. Run `bun run setup`. The wizard:
+   - opens the [WHOOP developer dashboard](https://developer-dashboard.whoop.com) and tells you what to set: redirect URI `http://localhost:8787/callback` and the read scopes
+   - asks for the app's Client ID and Client Secret once (the secret isn't echoed), checks them with WHOOP, and saves them to your system keychain (falling back to a private 0600 file when there's no keychain)
+   - opens WHOOP in your browser so you can approve access; tokens are saved to `~/.config/whoop-mcp/tokens.json` (0600)
+
+Later, `bun run login` signs in again with the saved app, `bun run status` shows what's configured, and `bun src/index.ts logout --forget-app` removes everything. `WHOOP_CLIENT_ID` / `WHOOP_CLIENT_SECRET` env vars (see `.env.example`) still override the saved credentials.
 
 ## Use with Claude Code
 
@@ -28,8 +29,7 @@ For Claude Desktop, add the following to `claude_desktop_config.json`. Use absol
   "mcpServers": {
     "whoop": {
       "command": "/opt/homebrew/bin/bun",
-      "args": ["run", "/absolute/path/to/whoop/src/index.ts"],
-      "env": { "WHOOP_CLIENT_ID": "…", "WHOOP_CLIENT_SECRET": "…" }
+      "args": ["run", "/absolute/path/to/whoop/src/index.ts"]
     }
   }
 }

@@ -1,6 +1,7 @@
+import { resolveClientCredentials } from "../auth/credentials.ts";
 import { refreshTokens, toStored } from "../auth/oauth.ts";
 import { readTokens, type StoredTokens, writeTokens } from "../auth/store.ts";
-import { type ClientCredentials, loadClientCredentials, WHOOP } from "../config.ts";
+import { type ClientCredentials, WHOOP } from "../config.ts";
 import { log } from "../log.ts";
 
 export class NotLoggedInError extends Error {
@@ -38,7 +39,10 @@ export class WhoopClient {
   lastMeta: ResponseMeta = { rateLimit: {} };
   private refreshing: Promise<StoredTokens> | null = null;
 
-  constructor(private readonly creds: () => ClientCredentials = () => loadClientCredentials()) {}
+  constructor(
+    private readonly creds: () => ClientCredentials | Promise<ClientCredentials> = async () =>
+      (await resolveClientCredentials()).creds,
+  ) {}
 
   async get<T>(path: string, query?: Record<string, string | number | undefined>): Promise<T> {
     const url = new URL(WHOOP.apiBase + path);
@@ -79,7 +83,7 @@ export class WhoopClient {
   private refresh(tokens: StoredTokens): Promise<StoredTokens> {
     this.refreshing ??= (async () => {
       if (!tokens.refresh_token) throw new NotLoggedInError();
-      const resp = await refreshTokens(this.creds(), tokens.refresh_token);
+      const resp = await refreshTokens(await this.creds(), tokens.refresh_token);
       const next = toStored(resp, tokens);
       await writeTokens(next); // persist before use: the old refresh token is now dead
       return next;

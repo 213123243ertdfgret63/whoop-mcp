@@ -20,7 +20,12 @@ export class OAuthHttpError extends Error {
   }
 }
 
-export type ClientAuthMethod = "body" | "basic";
+/**
+ * How the client authenticates at the token endpoint: secret in the form body (client_secret_post),
+ * HTTP Basic (client_secret_basic), or "none" — a public client that sends only its id and relies on PKCE.
+ * WHOOP's discovery document advertises all three; whether a dashboard app accepts "none" is an M0 probe.
+ */
+export type ClientAuthMethod = "body" | "basic" | "none";
 
 function base64url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
@@ -76,7 +81,7 @@ async function postToken(
     headers.Authorization = `Basic ${btoa(`${form(creds.clientId)}:${form(creds.clientSecret)}`)}`;
   } else {
     body.set("client_id", creds.clientId);
-    body.set("client_secret", creds.clientSecret);
+    if (auth === "body") body.set("client_secret", creds.clientSecret);
   }
   const res = await fetch(WHOOP.tokenUrl, { method: "POST", headers, body });
   const text = await res.text();

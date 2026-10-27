@@ -19,24 +19,32 @@ export function tokenPath(): string {
   return join(configDir(), "tokens.json");
 }
 
-export async function readTokens(): Promise<StoredTokens | null> {
+/** Reads a JSON file from the config dir; `null` when it doesn't exist. */
+export async function readPrivateJson<T>(path: string): Promise<T | null> {
   try {
-    return JSON.parse(await readFile(tokenPath(), "utf8")) as StoredTokens;
+    return JSON.parse(await readFile(path, "utf8")) as T;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw err;
   }
 }
 
-/** Atomic write: a crash mid-write must never leave a half-written (i.e. lost) refresh token. */
-export async function writeTokens(tokens: StoredTokens): Promise<void> {
-  const dir = configDir();
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  const path = tokenPath();
+/** Atomic, owner-only (0600 in a 0700 dir) write: a crash mid-write must never leave a half-written file. */
+export async function writePrivateJson(path: string, data: unknown): Promise<void> {
+  await mkdir(configDir(), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(tokens, null, 2), { mode: 0o600 });
+  await writeFile(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
   await chmod(tmp, 0o600);
   await rename(tmp, path);
+}
+
+export function readTokens(): Promise<StoredTokens | null> {
+  return readPrivateJson<StoredTokens>(tokenPath());
+}
+
+/** A lost write here means a lost (single-use) refresh token, hence the atomic write. */
+export function writeTokens(tokens: StoredTokens): Promise<void> {
+  return writePrivateJson(tokenPath(), tokens);
 }
 
 export async function deleteTokens(): Promise<void> {
