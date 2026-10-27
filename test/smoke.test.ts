@@ -112,14 +112,3 @@ test.skipIf(!binary)("compiled binary serves stdio", async () => {
     await client.close();
   }
 });
-
-test("the committed plugin bundle serves stdio with only bun (no node_modules next to it)", async () => {
-  const bundle = join(import.meta.dir, "..", "plugin", "server", "whoop-mcp.js");
-  const client = await connect([process.execPath, bundle]);
-  try {
-    const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["whoop_login", "whoop_profile", "whoop_status"]);
-  } finally {
-    await client.close();
-  }
-});

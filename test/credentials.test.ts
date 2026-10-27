@@ -166,7 +166,7 @@ describe("resolveClientCredentials", () => {
     expect(resolved.creds.clientSecret).toBe(creds.clientSecret);
   });
 
-  test("ignores unexpanded placeholders (an unfilled plugin user_config) and uses stored credentials", async () => {
+  test("ignores unexpanded placeholders from a client config and uses stored credentials", async () => {
     await saveCredentials(creds);
     const resolved = await resolveClientCredentials({
       WHOOP_CLIENT_ID: placeholder("client_id"),

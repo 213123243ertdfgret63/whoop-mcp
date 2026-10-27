@@ -122,6 +122,8 @@ describe("whoop_status", () => {
       expires_at: Date.now() + 3600_000,
       obtained_at: Date.now(),
     });
+    process.env.WHOOP_CLIENT_ID = "id";
+    process.env.WHOOP_CLIENT_SECRET = "secret";
     const { client } = await connect();
     const result = await client.callTool({ name: "whoop_status", arguments: {} });
     const data = result.structuredContent as {
@@ -138,6 +140,20 @@ describe("whoop_status", () => {
     expect(data.access_token_expires_in_s).toBeGreaterThan(3590);
     expect(data.access_token_expires_in_s).toBeLessThanOrEqual(3600);
     expect(text(result)).toContain("WHOOP is connected.");
+  });
+
+  test("warns when logged in but the app credentials are gone (the next refresh would fail)", async () => {
+    await writeTokenFile({
+      access_token: "a",
+      refresh_token: "r",
+      token_type: "bearer",
+      expires_at: Date.now() + 3600_000,
+      obtained_at: Date.now(),
+    });
+    const { client } = await connect();
+    const result = await client.callTool({ name: "whoop_status", arguments: {} });
+    expect(result.structuredContent).toMatchObject({ logged_in: true, app_credentials: "missing" });
+    expect(text(result)).toContain("reconfigure: true");
   });
 
   test("reports has_refresh_token false when the stored tokens lack one", async () => {
@@ -308,10 +324,21 @@ describe("whoop_login", () => {
     expect(status.structuredContent).toMatchObject({ logged_in: true, login: { state: "succeeded" } });
   });
 
-  test("without app credentials returns an actionable error instead of opening a browser", async () => {
-    const { client } = await connect(OK_RESPONSES, new BackgroundLogin({ openBrowser: false }));
+  test("without app credentials opens the browser setup page and says what it is for", async () => {
+    const SETUP_URL = "http://localhost:8787/setup?t=tok";
+    const flow = new BackgroundLogin({
+      openBrowser: false,
+      setup: (opts) =>
+        new Promise(() => {
+          queueMicrotask(() => opts.onSetupUrl?.(SETUP_URL));
+        }),
+    });
+    const { client } = await connect(OK_RESPONSES, flow);
     const result = await client.callTool({ name: "whoop_login", arguments: {} });
-    expect(result.isError).toBe(true);
-    expect(text(result)).toContain("whoop-mcp setup");
+    expect(result.isError).toBeFalsy();
+    expect(text(result)).toContain(SETUP_URL);
+    expect(text(result)).toMatch(/Client ID/);
+    const status = await client.callTool({ name: "whoop_status", arguments: {} });
+    expect(status.structuredContent).toMatchObject({ login: { state: "pending", authorize_url: SETUP_URL } });
   });
 });

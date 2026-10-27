@@ -1,5 +1,4 @@
 ---
-
 name: bun
 description: Check whether the installed Bun is outdated and keep the project's Bun pins honest, using Bun's live docs (llms.txt) and release notes instead of memory. Use this whenever you start working in a Bun project, before upgrading or pinning Bun (package.json engines/packageManager, @types/bun, setup-bun in CI, oven/bun Docker images), when a Bun API or CLI flag seems missing or behaves unexpectedly ("Bun.xxx is not a function", unknown flag, missing types), when the user asks what's new in Bun or whether to upgrade, and whenever you're about to rely on a Bun feature you're not sure the installed version has.
 ---

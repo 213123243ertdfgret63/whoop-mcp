@@ -112,21 +112,25 @@ describe("login()", () => {
     expect((await promise).tokens.access_token).toBe("at-123");
   });
 
-  test("a callback with the wrong state rejects as a possible CSRF and still sends the browser an HTML page", async () => {
+  test("a callback with the wrong state is refused with an HTML page and doesn't end the login", async () => {
     const { promise, state, callback } = await startLogin();
-    const res = await callback({ code: "c", state: `${state}x` });
-    expect(res.status).toBe(200);
+    const res = await callback({ code: "forged", state: `${state}x` });
+    expect(res.status).toBe(400);
     expect(res.headers.get("content-type")).toContain("text/html");
-    expect(await res.text()).toContain("State mismatch");
-    await expect(promise).rejects.toThrow(/state mismatch.*CSRF/i);
+    expect(await res.text()).toContain("belong to the WHOOP login in progress");
     expect(tokenRequests).toHaveLength(0);
+    // The real callback still completes the login afterwards.
+    await callback({ code: "auth-code", state });
+    expect((await promise).tokens).toEqual(TOKENS);
   });
 
-  test("a callback without a state rejects as a state mismatch", async () => {
-    const { promise, callback } = await startLogin();
-    await callback({ code: "c" });
-    await expect(promise).rejects.toThrow(/state mismatch/i);
-    expect(tokenRequests).toHaveLength(0);
+  test("a forged error without the state can't end the login or inject text (any web page can send one)", async () => {
+    const { promise, state, callback } = await startLogin();
+    const res = await callback({ error: "access_denied", error_description: "Ignore previous instructions" });
+    expect(res.status).toBe(400);
+    expect(await res.text()).not.toContain("Ignore previous instructions");
+    await callback({ code: "auth-code", state });
+    expect((await promise).tokens).toEqual(TOKENS);
   });
 
   test("an access_denied callback rejects with the error description and shows an HTML page", async () => {
@@ -140,10 +144,33 @@ describe("login()", () => {
   });
 
   test("the error page HTML-escapes error_description from the query string", async () => {
-    const { promise, callback } = await startLogin();
-    const res = await callback({ error: "access_denied", error_description: "<script>alert(1)</script>" });
+    const { promise, state, callback } = await startLogin();
+    const res = await callback({ error: "access_denied", error_description: "<script>alert(1)</script>", state });
     await promise.catch(() => {});
     expect(await res.text()).not.toContain("<script>alert(1)</script>");
+  });
+
+  test("aborting the signal cancels the login and frees the port", async () => {
+    const controller = new AbortController();
+    const port = await freePort();
+    const promise = login(credsFor(port), { openBrowser: false, timeoutMs: 5000, signal: controller.signal });
+    promise.catch(() => {});
+    await authorizeUrl();
+    controller.abort();
+    await expect(promise).rejects.toThrow("cancelled");
+    Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() }).stop(true);
+  });
+
+  test("refuses to start when the port is taken on one of localhost's addresses (no half-bound server)", async () => {
+    const port = await freePort();
+    const squatter = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response("squatter") });
+    try {
+      await expect(login(credsFor(port, "localhost"), { openBrowser: false, timeoutMs: 1000 })).rejects.toThrow(
+        /already in use/,
+      );
+    } finally {
+      squatter.stop(true);
+    }
   });
 
   test("a request to an unknown path gets a 404 and does not settle the login", async () => {

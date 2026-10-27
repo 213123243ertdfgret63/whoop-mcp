@@ -5,8 +5,7 @@ import { join } from "node:path";
  *
  * 1. Requires a clean `main` that matches `origin/main`.
  * 2. Runs lint, typecheck and tests.
- * 3. Bumps package.json and the Claude Code plugin manifest, rebuilds the committed plugin bundle, and
- *    prepends CHANGELOG.md with the commits since the last tag.
+ * 3. Bumps package.json and prepends CHANGELOG.md with the commits since the last tag.
  * 4. Commits "Release vX.Y.Z" and creates the annotated tag vX.Y.Z.
  * 5. With --push, pushes both atomically; the tag triggers .github/workflows/release.yml (binaries + GitHub release).
  *
@@ -131,15 +130,11 @@ async function main(): Promise<void> {
       prependChangelog((await changelogFile.exists()) ? await changelogFile.text() : null, section),
     );
     await Bun.write(pkgPath, setPackageVersion(pkgText, version));
-    // Plugin installs only update when plugin.json's version changes, and the bundle embeds the version.
-    const pluginManifest = join(root, "plugin", ".claude-plugin", "plugin.json");
-    await Bun.write(pluginManifest, setPackageVersion(await Bun.file(pluginManifest).text(), version));
-    await $`bun run build:plugin`.quiet();
     // Format here rather than relying on the pre-commit hook (which may be disabled), so the tagged
     // commit always passes `biome ci` in the release workflow.
-    await $`bunx biome format --write CHANGELOG.md package.json plugin/.claude-plugin/plugin.json`.quiet();
+    await $`bunx biome format --write CHANGELOG.md package.json`.quiet();
 
-    await $`git add package.json CHANGELOG.md plugin/.claude-plugin/plugin.json plugin/server/whoop-mcp.js`;
+    await $`git add package.json CHANGELOG.md`;
     await $`git commit --quiet -m ${`Release ${tag}`}`;
     await $`git tag -a ${tag} -m ${`Release ${tag}`}`;
   } catch (err) {

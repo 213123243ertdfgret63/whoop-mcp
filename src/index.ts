@@ -3,6 +3,7 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { BackgroundLogin } from "./auth/background-login.ts";
 import { deleteStoredCredentials, readStoredCredentials, resolveClientCredentials } from "./auth/credentials.ts";
 import { deleteTokens, readTokens, tokenPath } from "./auth/store.ts";
+import { addToClaude, currentServerCommand, describeResults, removeFromClaude } from "./cli/claude-config.ts";
 import { terminalIO } from "./cli/terminal.ts";
 import { VERSION } from "./config.ts";
 import { log } from "./log.ts";
@@ -25,6 +26,9 @@ Usage: whoop-mcp <command>
   login [--no-browser]  Log in with the browser using the saved credentials
   status                Show credential and login state
   logout [--forget-app] Delete saved tokens (and, with --forget-app, the app credentials)
+  claude add            Register this server with Claude Code and Claude Desktop (whichever are installed)
+      --command <path>    Executable Claude should run (default: this binary, or bun + src/index.ts)
+  claude remove         Unregister it from both
   version               Print the version`;
 
 async function main(): Promise<void> {
@@ -36,6 +40,9 @@ async function main(): Promise<void> {
         // One login flow per process, shared by whichever protocol-era instance serves the connection.
         const loginFlow = new BackgroundLogin();
         serveStdio(() => createServer(undefined, loginFlow));
+        // When the client goes away mid-login, close the local login server so this process can exit and
+        // doesn't keep the callback port busy for the next session.
+        process.stdin.once("end", () => void loginFlow.cancel());
       }
       return;
 
@@ -88,6 +95,32 @@ async function main(): Promise<void> {
         print((await deleteStoredCredentials()) ? "Deleted saved app credentials." : "No saved app credentials.");
       }
       return;
+
+    case "claude": {
+      const [action] = rest;
+      if (action !== "add" && action !== "remove") {
+        print(USAGE);
+        process.exitCode = 2;
+        return;
+      }
+      const results =
+        action === "add"
+          ? await addToClaude(
+              rest.includes("--command")
+                ? { command: rest[rest.indexOf("--command") + 1] ?? "", args: [] }
+                : currentServerCommand(),
+            )
+          : await removeFromClaude();
+      print(
+        `${action === "add" ? "Adding whoop to Claude" : "Removing whoop from Claude"}:\n${describeResults(results)}`,
+      );
+      if (results.some((r) => r.outcome === "failed")) process.exitCode = 1;
+      else if (action === "add" && results.every((r) => r.outcome === "skipped")) {
+        print("Neither Claude Code nor Claude Desktop was found.");
+        process.exitCode = 1;
+      }
+      return;
+    }
 
     case "help":
     case "--help":

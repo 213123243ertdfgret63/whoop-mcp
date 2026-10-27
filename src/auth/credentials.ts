@@ -96,5 +96,7 @@ export async function resolveClientCredentials(
     const redirectUri = envValue(env.WHOOP_REDIRECT_URI);
     return redirectUri ? { ...stored, creds: { ...stored.creds, redirectUri } } : stored;
   }
-  throw new ConfigError("No WHOOP app credentials found. Run `whoop-mcp setup` in a terminal.");
+  throw new ConfigError(
+    "No WHOOP app credentials found. Use the whoop_login tool (it opens a setup page in the browser), or run `whoop-mcp setup` in a terminal.",
+  );
 }

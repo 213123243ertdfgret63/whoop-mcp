@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { BackgroundLogin, type BackgroundLoginDeps } from "../src/auth/background-login.ts";
+import type { BrowserSetupOptions } from "../src/auth/browser-setup.ts";
 import type { LoginOptions, LoginResult } from "../src/auth/login.ts";
 import { type ClientCredentials, ConfigError } from "../src/config.ts";
 
@@ -28,6 +29,7 @@ function controllableLogin() {
     calls.push(opts);
     const d = Promise.withResolvers<LoginResult>();
     finish = d;
+    opts.signal?.addEventListener("abort", () => d.reject(new Error("WHOOP login was cancelled.")));
     queueMicrotask(() => opts.onAuthorizeUrl?.(URL_));
     return d.promise;
   };
@@ -62,7 +64,7 @@ describe("BackgroundLogin", () => {
 
   test("returns the authorize URL as soon as it exists, before the user approves", async () => {
     const { flow, saved } = setup();
-    expect(await flow.start()).toEqual({ authorizeUrl: URL_, alreadyPending: false });
+    expect(await flow.start()).toEqual({ authorizeUrl: URL_, alreadyPending: false, kind: "login" });
     expect(flow.status).toMatchObject({ state: "pending", authorizeUrl: URL_ });
     expect(saved).toEqual([]);
   });
@@ -85,7 +87,7 @@ describe("BackgroundLogin", () => {
   test("a second start while waiting reuses the pending login instead of opening another", async () => {
     const { flow, fake } = setup();
     await flow.start();
-    expect(await flow.start()).toEqual({ authorizeUrl: URL_, alreadyPending: true });
+    expect(await flow.start()).toEqual({ authorizeUrl: URL_, alreadyPending: true, kind: "login" });
     expect(fake.calls).toHaveLength(1);
   });
 
@@ -108,14 +110,40 @@ describe("BackgroundLogin", () => {
     expect(flow.status).toMatchObject({ state: "failed" });
   });
 
-  test("missing app credentials throw without starting a login", async () => {
-    const { flow, fake } = setup({
+  test("without app credentials it starts the browser setup page instead of a login", async () => {
+    const SETUP_URL = "http://localhost:8787/setup?t=tok";
+    const setupCalls: BrowserSetupOptions[] = [];
+    let finishSetup = () => {};
+    const { flow, fake, saved } = setup({
       resolveCreds: async () => {
-        throw new ConfigError("No WHOOP app credentials found. Run `whoop-mcp setup` in a terminal.");
+        throw new ConfigError("No WHOOP app credentials found.");
+      },
+      redirectUri: () => "http://127.0.0.1:9999/cb",
+      setup: (opts) =>
+        new Promise((resolve) => {
+          setupCalls.push(opts);
+          queueMicrotask(() => opts.onSetupUrl?.(SETUP_URL));
+          finishSetup = () => resolve({ creds, saved: "keychain", tokens: RESULT.tokens });
+        }),
+    });
+    expect(await flow.start()).toEqual({ authorizeUrl: SETUP_URL, alreadyPending: false, kind: "setup" });
+    expect(fake.calls).toHaveLength(0);
+    expect(setupCalls[0]).toMatchObject({ redirectUri: "http://127.0.0.1:9999/cb", openBrowser: false });
+    expect(flow.status).toMatchObject({ state: "pending", kind: "setup", authorizeUrl: SETUP_URL });
+
+    finishSetup();
+    await flow.settled();
+    expect(saved.map((r) => r.tokens)).toEqual([RESULT.tokens]);
+    expect(flow.status).toMatchObject({ state: "succeeded" });
+  });
+
+  test("errors other than missing credentials still propagate", async () => {
+    const { flow } = setup({
+      resolveCreds: async () => {
+        throw new Error("keychain locked");
       },
     });
-    await expect(flow.start()).rejects.toBeInstanceOf(ConfigError);
-    expect(fake.calls).toHaveLength(0);
+    await expect(flow.start()).rejects.toThrow("keychain locked");
     expect(flow.status).toEqual({ state: "idle" });
   });
 
@@ -138,5 +166,61 @@ describe("BackgroundLogin", () => {
     fake.approve();
     await flow.settled();
     expect(flow.status).toMatchObject({ state: "failed", error: "disk full" });
+  });
+
+  test("concurrent starts share one flow instead of racing for the port", async () => {
+    const { flow, fake } = setup();
+    const [a, b] = await Promise.all([flow.start(), flow.start()]);
+    expect(fake.calls).toHaveLength(1);
+    expect(a.authorizeUrl).toBe(URL_);
+    expect(b).toEqual({ authorizeUrl: URL_, alreadyPending: true, kind: "login" });
+    expect(flow.status).toMatchObject({ state: "pending" });
+  });
+
+  test("cancel aborts the pending flow and returns to idle (not 'failed')", async () => {
+    const { flow, fake } = setup();
+    await flow.start();
+    await flow.cancel();
+    expect(fake.calls[0]?.signal?.aborted).toBe(true);
+    expect(flow.status).toEqual({ state: "idle" });
+    expect((await flow.start()).alreadyPending).toBe(false);
+  });
+
+  test("reconfigure cancels a pending login and opens the setup page even though credentials exist", async () => {
+    const SETUP_URL = "http://localhost:8787/setup?t=again";
+    const setupCalls: BrowserSetupOptions[] = [];
+    const { flow, fake } = setup({
+      setup: (opts) =>
+        new Promise(() => {
+          setupCalls.push(opts);
+          queueMicrotask(() => opts.onSetupUrl?.(SETUP_URL));
+        }),
+    });
+    await flow.start(); // a normal login with the (wrong) saved credentials
+    const result = await flow.start({ reconfigure: true });
+    expect(fake.calls[0]?.signal?.aborted).toBe(true);
+    expect(result).toEqual({ authorizeUrl: SETUP_URL, alreadyPending: false, kind: "setup" });
+    expect(setupCalls).toHaveLength(1);
+    expect(flow.status).toMatchObject({ state: "pending", kind: "setup" });
+  });
+
+  test("a superseded flow finishing late doesn't overwrite the current status", async () => {
+    const flows: { reject: (e: Error) => void }[] = [];
+    const { flow } = setup({
+      // Unlike the shared fake, ignores abort, so the old flow can still settle after being superseded.
+      login: (_c, opts) => {
+        const d = Promise.withResolvers<LoginResult>();
+        flows.push(d);
+        queueMicrotask(() => opts.onAuthorizeUrl?.(URL_));
+        return d.promise;
+      },
+    });
+    await flow.start();
+    await Promise.race([flow.cancel(), Bun.sleep(10)]); // the old flow ignores the abort, so don't wait on it
+    await flow.start();
+    flows[0]?.reject(new Error("late failure from the old flow"));
+    await Bun.sleep(5);
+    expect(flows).toHaveLength(2);
+    expect(flow.status).toMatchObject({ state: "pending" });
   });
 });

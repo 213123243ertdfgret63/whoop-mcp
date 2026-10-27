@@ -42,16 +42,6 @@ jobs:
         if: runner.os == 'Linux'
         run: bunx biome ci .
 
-      # The plugin runs this committed bundle; a stale one would ship old code to plugin users.
-      - name: Plugin bundle is up to date
-        if: runner.os == 'Linux'
-        run: |
-          bun run build:plugin
-          git diff --exit-code -- plugin/server/whoop-mcp.js || {
-            echo "::error::plugin/server/whoop-mcp.js is stale; run 'bun run build:plugin' and commit it"
-            exit 1
-          }
-
       - name: Typecheck
         run: bun run typecheck
 

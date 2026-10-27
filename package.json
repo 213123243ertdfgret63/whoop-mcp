@@ -20,7 +20,6 @@
     "gen:types": "bunx openapi-typescript@7.13.0 openapi/whoop.yaml -o src/whoop/openapi.d.ts",
     "inspect": "bunx @modelcontextprotocol/inspector bun run src/index.ts",
     "build": "bun build src/index.ts --compile --minify --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile dist/whoop-mcp",
-    "build:plugin": "bun build src/index.ts --target=bun --minify --outfile plugin/server/whoop-mcp.js",
     "release": "bun run scripts/release.ts",
     "prepare": "husky && bun run gen:types"
   },

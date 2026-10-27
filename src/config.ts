@@ -38,7 +38,7 @@ export class ConfigError extends Error {
 }
 
 /**
- * A trimmed env value, or undefined when blank or an unexpanded `${...}` placeholder (e.g. a plugin's
+ * A trimmed env value, or undefined when blank or an unexpanded `${...}` placeholder (e.g. a client config's
  * `${user_config.client_id}` that was never filled in), so it can't masquerade as a real credential.
  */
 export function envValue(value: string | undefined): string | undefined {

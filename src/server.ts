@@ -45,6 +45,7 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
         app_credentials: z.enum(["env", "keychain", "file", "missing"]),
         login: z.object({
           state: z.enum(["idle", "pending", "succeeded", "failed"]),
+          kind: z.enum(["setup", "login"]).optional(),
           authorize_url: z.string().optional(),
           error: z.string().optional(),
         }),
@@ -67,7 +68,7 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
         app_credentials,
         login: {
           state: login.state,
-          ...(login.state === "pending" ? { authorize_url: login.authorizeUrl } : {}),
+          ...(login.state === "pending" ? { kind: login.kind, authorize_url: login.authorizeUrl } : {}),
           ...(login.state === "failed" ? { error: login.error } : {}),
         },
         token_file: tokenPath(),
@@ -77,15 +78,20 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
         has_refresh_token: Boolean(tokens?.refresh_token),
         server_version: VERSION,
       };
-      const summary = data.logged_in
-        ? "WHOOP is connected."
-        : login.state === "pending"
-          ? `Waiting for the user to approve access in the browser: ${login.authorizeUrl}`
-          : app_credentials === "missing"
-            ? "No WHOOP app credentials yet: add your WHOOP app's client ID and secret (`/plugin configure`, `whoop-mcp setup`, or WHOOP_CLIENT_ID/WHOOP_CLIENT_SECRET), then call whoop_login."
+      const summary =
+        login.state === "pending"
+          ? login.kind === "setup"
+            ? `Waiting for the user to finish the setup page in the browser (enter the WHOOP app's Client ID and Secret, then approve access): ${login.authorizeUrl}`
+            : `Waiting for the user to approve access in the browser: ${login.authorizeUrl}`
+          : data.logged_in
+            ? app_credentials === "missing"
+              ? "Logged in, but the WHOOP app credentials are gone, so the next token refresh will fail. Call whoop_login with reconfigure: true to enter them again."
+              : "WHOOP is connected."
             : login.state === "failed"
-              ? `The last login failed (${login.error}). Call whoop_login to try again.`
-              : "Not logged in: call whoop_login to sign in with the browser (or run `whoop-mcp login` in a terminal).";
+              ? `The last login failed (${login.error}). Call whoop_login to try again, or with reconfigure: true to enter different WHOOP app credentials.`
+              : app_credentials === "missing"
+                ? "No WHOOP app credentials yet: call whoop_login, which opens a setup page in the browser to enter them (or run `whoop-mcp setup` in a terminal, or set WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET)."
+                : "Not logged in: call whoop_login to sign in with the browser (or run `whoop-mcp login` in a terminal).";
       return jsonResult(data, summary);
     },
   );
@@ -95,20 +101,29 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
     {
       title: "Log in to WHOOP",
       description:
-        "Start signing in to WHOOP: opens the WHOOP consent page in the user's browser and returns its URL (show it to the user in case the browser didn't open). Returns immediately; the login completes in the background once the user approves, so call whoop_status afterwards to confirm. Needs the WHOOP app credentials to be configured first.",
+        "Connect the user's WHOOP account in the browser. Opens a page and returns its URL immediately (always show the URL to the user in case the browser didn't open). If no WHOOP app credentials are configured yet, the page is a local setup form that collects the app's Client ID and Secret (with instructions for creating the app) and then continues to WHOOP; otherwise it goes straight to WHOOP's consent page. The rest happens in the browser, so after the user says they're done, call whoop_status to confirm. Use reconfigure: true when the saved app credentials are wrong (WHOOP showed an error such as an invalid client or redirect URI, or the user wants another app): it cancels any pending login and opens the setup page.",
+      inputSchema: z.object({
+        reconfigure: z
+          .boolean()
+          .default(false)
+          .describe("Open the setup page to enter different WHOOP app credentials, even if some are saved."),
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async () => {
+    async ({ reconfigure }) => {
       try {
-        const { authorizeUrl, alreadyPending } = await loginFlow.start();
-        const lead = alreadyPending
-          ? "A WHOOP login is already waiting for approval."
-          : "Opened the WHOOP consent page in the browser.";
+        const { authorizeUrl, alreadyPending, kind } = await loginFlow.start({ reconfigure });
+        const lead =
+          kind === "setup"
+            ? `${alreadyPending ? "The WHOOP setup page is already open" : "Opened a WHOOP setup page in the browser"}. It explains how to create a free WHOOP developer app, asks for its Client ID and Client Secret, and then continues to WHOOP to approve access.`
+            : alreadyPending
+              ? "A WHOOP login is already waiting for approval."
+              : "Opened the WHOOP consent page in the browser.";
         return {
           content: [
             {
               type: "text" as const,
-              text: `${lead} If it didn't open, visit:\n\n${authorizeUrl}\n\nAfter approving access, call whoop_status to confirm the login.`,
+              text: `${lead} If the browser didn't open, visit:\n\n${authorizeUrl}\n\nWhen the user has finished in the browser, call whoop_status to confirm.`,
             },
           ],
         };
