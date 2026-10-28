@@ -512,3 +512,63 @@ describe("timeouts and the end of the flow", () => {
     await h.cancel();
   });
 });
+
+describe("review fixes", () => {
+  test("Try again reuses the pending approval unless WHOOP refused it", async () => {
+    const h = await start();
+    const res = await submit(h, goodForm(h));
+    const state = new URL(res.headers.get("location") ?? "").searchParams.get("state");
+    const again = await fetch(`${h.base}/setup/authorize?t=${h.token}`, { redirect: "manual" });
+    expect(new URL(again.headers.get("location") ?? "").searchParams.get("state")).toBe(state);
+    await fetch(`${h.base}/callback?code=c&state=${state}`);
+    expect((await h.result).tokens).toEqual(TOKENS);
+  });
+
+  test("the plain form shares the check limit with the page's script", async () => {
+    const h = await start({ verifyResult: () => ({ ok: false, reason: "no." }) });
+    let last = 0;
+    for (let i = 0; i < 11; i++)
+      last = (await submit(h, { token: h.token, client_id: "a", client_secret: `s${i}` })).status;
+    expect(h.verified).toHaveLength(10);
+    expect(last).toBe(429);
+    await h.cancel();
+  });
+
+  test("new credentials cancel the pending approval, so its late callback is refused", async () => {
+    const h = await start();
+    const first = await submit(h, { token: h.token, client_id: "one", client_secret: "s1" });
+    const oldState = new URL(first.headers.get("location") ?? "").searchParams.get("state");
+    await submit(h, { token: h.token, client_id: "two", client_secret: "s2" });
+    expect((await fetch(`${h.base}/callback?code=old&state=${oldState}`)).status).toBe(400);
+    expect(h.exchanged).toEqual([]);
+    await h.cancel();
+  });
+
+  test("tokens are saved before the page says connected; a failed save is shown as failed", async () => {
+    const h = await start({
+      graceMs: 5000,
+      persist: async () => {
+        throw new Error("disk full");
+      },
+    });
+    const res = await submit(h, goodForm(h));
+    const state = new URL(res.headers.get("location") ?? "").searchParams.get("state");
+    await fetch(`${h.base}/callback?code=c&state=${state}`);
+    await expect(h.result).rejects.toThrow("disk full");
+    const status = (await (
+      await fetch(`${h.base}/setup/status`, { headers: { "X-Setup-Token": h.token } })
+    ).json()) as {
+      phase: string;
+    };
+    expect(status.phase).toBe("failed");
+    await h.cancel();
+  });
+
+  test("the side window is opened without a link back to this page", async () => {
+    const h = await start();
+    const html = await (await fetch(h.setupUrl)).text();
+    expect(html).toContain('rel="noopener"');
+    expect(html).toContain('"noopener,popup');
+    await h.cancel();
+  });
+});

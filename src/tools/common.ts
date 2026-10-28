@@ -1,4 +1,5 @@
 import type { LoginStatus } from "../auth/background-login.ts";
+import { ConfigError } from "../config.ts";
 import { errorFields, log } from "../log.ts";
 import { NotLoggedInError } from "../whoop/client.ts";
 
@@ -57,7 +58,12 @@ export async function notConnectedResult(err: NotLoggedInError, loginFlow?: Auto
   };
 }
 
-/** errorResult, except a missing login starts one (see notConnectedResult). */
+/**
+ * errorResult, except a missing login starts one (see notConnectedResult). Missing app credentials (a refresh
+ * that can't find them) count too: the login then opens the setup page to enter them.
+ */
 export function toolError(err: unknown, loginFlow?: AutoLogin) {
-  return err instanceof NotLoggedInError ? notConnectedResult(err, loginFlow) : errorResult(err);
+  if (err instanceof NotLoggedInError) return notConnectedResult(err, loginFlow);
+  if (err instanceof ConfigError) return notConnectedResult(new NotLoggedInError(), loginFlow);
+  return errorResult(err);
 }

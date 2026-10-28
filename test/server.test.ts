@@ -408,11 +408,52 @@ describe("whoop_login", () => {
       expires_at: Date.now() + 3600_000,
       obtained_at: Date.now(),
     });
+    process.env.WHOOP_CLIENT_ID = "id";
+    process.env.WHOOP_CLIENT_SECRET = "secret";
     const { flow } = fakeFlow();
     const { client } = await connect(OK_RESPONSES, flow);
     const result = await client.callTool({ name: "whoop_login", arguments: {} });
     expect(result.structuredContent).toEqual({ state: "connected" });
     expect(flow.status.state).toBe("idle");
+  });
+
+  test("tokens without the app credentials a refresh needs don't count as connected", async () => {
+    await writeTokenFile({
+      access_token: "a",
+      refresh_token: "r",
+      token_type: "bearer",
+      scope: SCOPES.join(" "),
+      expires_at: Date.now() + 3600_000,
+      obtained_at: Date.now(),
+    });
+    const flow = pageOnlyFlow();
+    const { client } = await connect(OK_RESPONSES, flow);
+    const result = await client.callTool({ name: "whoop_login", arguments: { wait_seconds: 0 } });
+    expect(result.structuredContent).toMatchObject({ state: "pending", kind: "setup" });
+  });
+
+  test("a problem is passed on once, then later calls wait quietly", async () => {
+    let report: ((problem: string) => void) | undefined;
+    const flow = new BackgroundLogin({
+      openBrowser: false,
+      resolveCreds: async () => {
+        throw new ConfigError("none");
+      },
+      setup: (opts) =>
+        new Promise(() => {
+          queueMicrotask(() => opts.onSetupUrl?.("http://localhost:8787/setup?t=x"));
+          report = (problem) => opts.onPhase?.("authorizing", problem);
+        }),
+    });
+    const { client } = await connect(OK_RESPONSES, flow);
+    await client.callTool({ name: "whoop_login", arguments: { wait_seconds: 0 } });
+    const first = client.callTool({ name: "whoop_login", arguments: { wait_seconds: 5 } });
+    await Bun.sleep(30);
+    report?.("WHOOP refused the redirect URL.");
+    expect(text(await first)).toContain("showing a problem");
+    const second = await client.callTool({ name: "whoop_login", arguments: { wait_seconds: 0 } });
+    expect(text(second)).toContain("Still waiting");
+    expect(text(second)).not.toContain("showing a problem");
   });
 
   test("a problem shown on the setup page ends the wait so Claude can mention it", async () => {

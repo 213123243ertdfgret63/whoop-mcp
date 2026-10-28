@@ -52,6 +52,8 @@ export interface BrowserSetupOptions {
   onPhase?: (phase: SetupPhase, problem?: string) => void;
   /** Pre-fills the Client ID, e.g. from an earlier attempt. */
   clientId?: string;
+  /** Saves the tokens; runs before the page says "connected", so a failed save is never shown as success. */
+  persist?: (tokens: TokenResponse) => Promise<void>;
   /** Injectable for tests. */
   verify?: (creds: ClientCredentials) => Promise<VerifyResult>;
   save?: (creds: ClientCredentials) => Promise<CredentialSource>;
@@ -149,7 +151,7 @@ don't let open-source tools share one app, so you make your own; only you use it
 
 <section id="s1" aria-labelledby="s1h">
   <h2 id="s1h">1. Create the app</h2>
-  <p><a id="open-whoop" class="button" href="${esc(CREATE_URL)}" target="whoop-dev">Open WHOOP side by side</a></p>
+  <p><a id="open-whoop" class="button" href="${esc(CREATE_URL)}" target="whoop-dev" rel="noopener">Open WHOOP side by side</a></p>
   <p class="small muted">Sign in with your WHOOP account. Already have an app? Open it instead, add the Redirect URL
   below, and skip to step 2.</p>
   <p class="callout small">First time? WHOOP asks you to create a <b>Team</b>: name it anything, e.g. <i>personal</i>.</p>
@@ -206,12 +208,13 @@ don't let open-source tools share one app, so you make your own; only you use it
 
   const script = `
 "use strict";
-const C = ${scriptJson({ token: opts.token, createUrl: CREATE_URL, phase: opts.phase, problem: opts.problem ?? null })};
+const C = ${scriptJson({ token: opts.token, createUrl: CREATE_URL, phase: opts.phase, problem: opts.problem ?? null, keptSecret: Boolean(opts.keptSecretTail) })};
 const $ = (id) => document.getElementById(id);
 const id = $("client_id"), secret = $("client_secret"), statusEl = $("status");
 const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 for (const k of document.querySelectorAll(".paste-key")) k.textContent = mac ? "⌘V" : "Ctrl+V";
-let popup = null, authorizeUrl = null, goTimer = null, verifyTimer = null, verifying = false, polling = false;
+let authorizeUrl = null, verifiedFor = null, goTimer = null, verifyTimer = null, verifying = false, polling = false;
+const values = () => id.value.trim() + "\\n" + secret.value.trim();
 
 function setStep(n) {
   for (const i of [1, 2, 3]) {
@@ -238,10 +241,11 @@ function fieldError(field, message) {
 }
 
 // Step 1: WHOOP's dashboard in a window beside this one, so values can be copied across without switching tabs.
+// noopener: pages loaded in that window must not be able to reach (and replace) this one.
 $("open-whoop").addEventListener("click", (e) => {
+  e.preventDefault();
   const w = Math.round(screen.availWidth * 0.6), h = screen.availHeight;
-  const p = window.open(C.createUrl, "whoop-dev", "popup,width=" + w + ",height=" + h + ",left=" + (screen.availWidth - w) + ",top=0");
-  if (p) { e.preventDefault(); popup = p; }
+  window.open(C.createUrl, "whoop-dev", "noopener,popup,width=" + w + ",height=" + h + ",left=" + (screen.availWidth - w) + ",top=0");
 });
 const copyButtons = [...document.querySelectorAll("button.copy")];
 copyButtons.forEach((b, i) => {
@@ -256,31 +260,46 @@ copyButtons.forEach((b, i) => {
   b.addEventListener("dragstart", (e) => e.dataTransfer.setData("text/plain", b.dataset.value));
 });
 
-// Step 2: paste anywhere. Two values at once fill both boxes; one fills the empty box.
-function distribute(text) {
+// Step 2: paste anywhere. Two values at once fill both boxes; a single value goes by its shape (WHOOP's IDs
+// are UUIDs, secrets long strings), else into the box being pasted into, else the empty box.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function distribute(text, target) {
   const t = text.trim();
   if (!t) return;
-  const labelled = /client\\s*id\\W*([^\\s]+)[\\s\\S]*?client\\s*secret\\W*([^\\s]+)/i.exec(t);
+  const labelled = /client\\s*id\\W*(\\S+)[\\s\\S]*?client\\s*secret\\W*(\\S+)/i.exec(t);
   const parts = t.split(/\\s+/);
   if (labelled) { id.value = labelled[1]; secret.value = labelled[2]; }
-  else if (parts.length === 2) { id.value = parts[0]; secret.value = parts[1]; }
-  else if (!id.value && !secret.value) {
-    // Shape only orders the guess; nothing is rejected on shape.
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(t)) id.value = t; else secret.value = t;
+  else if (parts.length === 2) {
+    const [a, b] = UUID.test(parts[1]) && !UUID.test(parts[0]) ? [parts[1], parts[0]] : parts;
+    id.value = a; secret.value = b;
   }
+  else if (UUID.test(t)) id.value = t;
+  else if (t.length >= 40) secret.value = t;
+  else if (target === id || target === secret) target.value = t;
   else if (!id.value) id.value = t;
   else secret.value = t;
   setStep(2);
+  $("paste-hint").hidden = true;
+  changed();
   scheduleVerify(300);
 }
 document.addEventListener("paste", (e) => {
-  if (e.target === id || e.target === secret) { setStep(2); return scheduleVerify(300); }
   const text = e.clipboardData && e.clipboardData.getData("text");
   if (!text) return;
   e.preventDefault();
-  distribute(text);
+  distribute(text, e.target);
 });
-for (const el of [id, secret]) el.addEventListener("input", () => scheduleVerify(600));
+// WebKit only offers paste on non-editable content when this is cancelled.
+document.addEventListener("beforepaste", (e) => e.preventDefault());
+// After a check succeeded, editing either box means the new values need checking.
+function changed() {
+  if (verifiedFor !== null && values() !== verifiedFor) {
+    authorizeUrl = null; verifiedFor = null;
+    clearTimeout(goTimer);
+    $("cancel").hidden = true;
+  }
+}
+for (const el of [id, secret]) el.addEventListener("input", () => { changed(); scheduleVerify(600); });
 // Coming back from WHOOP's window with a box still empty: remind where to paste.
 let away = false;
 window.addEventListener("blur", () => { away = true; });
@@ -297,13 +316,16 @@ show.addEventListener("click", () => {
   show.setAttribute("aria-pressed", String(!visible));
 });
 
+const secretOk = () => secret.value.trim() || C.keptSecret;
 function scheduleVerify(ms) {
   clearTimeout(verifyTimer);
-  if (id.value.trim() && secret.value.trim()) verifyTimer = setTimeout(verify, ms);
+  if (id.value.trim() && secret.value.trim()) verifyTimer = setTimeout(() => verify(false), ms);
 }
-async function verify() {
-  if (verifying || authorizeUrl) return;
+async function verify(explicit) {
+  if (authorizeUrl) return;
+  if (verifying) { scheduleVerify(400); return; } // checked again once the current check returns
   verifying = true;
+  const sent = values();
   fieldError(null, "");
   say("Checking with WHOOP…");
   try {
@@ -313,13 +335,16 @@ async function verify() {
       body: JSON.stringify({ client_id: id.value.trim(), client_secret: secret.value.trim() }),
     });
     const data = await res.json();
+    if (values() !== sent) return scheduleVerify(300); // the boxes changed meanwhile: check the new values
     if (!data.ok) {
       fieldError(data.field, data.message);
       say(data.message, "err");
-      (data.field === "client_id" ? id : secret).focus();
+      // Only on an explicit Save: moving focus during automatic checks would capture the next paste.
+      if (explicit) { const el = data.field === "client_id" ? id : secret; el.focus(); el.select(); }
       return;
     }
     authorizeUrl = data.authorize_url;
+    verifiedFor = sent;
     $("paste-hint").hidden = true;
     say((data.warning ? data.warning + " " : "") + "Saved. Opening WHOOP to approve access…", "ok");
     $("cancel").hidden = false;
@@ -338,30 +363,26 @@ $("cancel").addEventListener("click", () => {
 $("creds").addEventListener("submit", (e) => {
   e.preventDefault();
   if (authorizeUrl) return go();
-  if (!id.value.trim() || !secret.value.trim()) {
+  if (!id.value.trim() || !secretOk()) {
     fieldError(!id.value.trim() ? "client_id" : "client_secret", "Paste this one from your WHOOP app.");
     return;
   }
-  verify();
+  verify(true);
 });
 
-// Step 3: approve in WHOOP (in the side window when there is one), and follow the flow until it's done.
+// Step 3: approve in WHOOP. WHOOP then returns to this server, whose page follows the flow to the end.
 function go() {
   clearTimeout(goTimer);
   $("cancel").hidden = true;
   setStep(3);
-  if (popup && !popup.closed) {
-    try { popup.location.href = authorizeUrl; popup.focus(); } catch { location.href = authorizeUrl; return; }
-    poll();
-  } else {
-    location.href = authorizeUrl;
-  }
+  location.href = authorizeUrl;
 }
 async function poll() {
   if (polling) return;
   polling = true;
   const started = Date.now();
-  for (;;) {
+  // Polling isn't activity, so the server's idle timeout still ends an abandoned setup; stop after 30 min.
+  while (Date.now() - started < 30 * 60000) {
     await new Promise((r) => setTimeout(r, 2000));
     let s;
     try {
@@ -376,7 +397,6 @@ async function poll() {
       $("s3text").textContent = "✓ WHOOP is connected. Claude is continuing in the chat; you can close this tab.";
       $("s3text").className = "ok";
       $("s3help").hidden = true;
-      try { if (popup && !popup.closed) popup.close(); } catch {}
       return;
     }
     if (s.phase === "failed") {
@@ -522,9 +542,18 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
       const field: Field = !clientId && !clientSecret ? "both" : !clientId ? "client_id" : "client_secret";
       return { ok: false, field, message: "Paste both the Client ID and the Client Secret.", status: 400 };
     }
+    // One limit for every path that asks WHOOP to check credentials (the page's script and the plain form).
+    const now = Date.now();
+    while (verifyTimes.length && now - verifyTimes[0]! > 60_000) verifyTimes.shift();
+    if (verifyTimes.length >= VERIFY_LIMIT_PER_MINUTE) {
+      return { ok: false, field: null, message: "Too many tries; wait a minute.", status: 429 };
+    }
+    verifyTimes.push(now);
     const outcome = (async (): Promise<SubmitOutcome> => {
       const creds = { clientId, clientSecret, redirectUri: opts.redirectUri };
       lastClientId = clientId;
+      // New credentials replace any approval in progress: a late callback for it must not be accepted.
+      authorization = null;
       setPhase("verifying");
       const result = await verifyCreds(creds);
       if (result.ok === false) {
@@ -543,7 +572,8 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
         warning = "Couldn't check them with WHOOP right now; continuing anyway.";
       }
       try {
-        submitted = { creds, saved: await save(creds) };
+        const saved = await save(creds);
+        submitted = { creds, saved };
       } catch (err) {
         keptSecret = clientSecret;
         setPhase("form");
@@ -605,7 +635,7 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
 
     if (url.pathname === `${SETUP_PATH}/status` && req.method === "GET") {
       if (!tokenOk(req, url)) return json({ error: "forbidden" }, 403);
-      touch();
+      // Not activity: an open tab polling must not keep an abandoned setup alive past the idle timeout.
       // Never the secret, the tokens or the OAuth state.
       return json({ phase, ...(problem ? { problem } : {}), client_id_saved: submitted !== null });
     }
@@ -621,7 +651,11 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
     if (url.pathname === `${SETUP_PATH}/authorize` && req.method === "GET") {
       if (!tokenOk(req, url)) return expired();
       if (!submitted) return Response.redirect(`${SETUP_PATH}?t=${token}`, 303);
+      if (phase === "exchanging" || phase === "done") return finishingPage(token);
       touch();
+      // A new approval (new state) only after WHOOP refused one; otherwise reuse the pending one, so an
+      // approval the user is still completing in another window stays valid.
+      if (phase === "authorizing" && authorization && !problem) return Response.redirect(authorization.url, 303);
       return Response.redirect(authorize(submitted.creds), 303);
     }
 
@@ -633,12 +667,6 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
         return json({ error: "JSON only" }, 415);
       }
       if (!tokenOk(req, url)) return json({ error: "forbidden" }, 403);
-      const now = Date.now();
-      while (verifyTimes.length && now - verifyTimes[0]! > 60_000) verifyTimes.shift();
-      if (verifyTimes.length >= VERIFY_LIMIT_PER_MINUTE) {
-        return json({ ok: false, field: null, message: "Too many tries; wait a minute." }, 429);
-      }
-      verifyTimes.push(now);
       touch();
       const text = await req.text();
       if (text.length > MAX_BODY_BYTES) return json({ error: "too large" }, 413);
@@ -648,7 +676,11 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
       } catch {
         return json({ error: "bad JSON" }, 400);
       }
-      const outcome = await submit(String(body.client_id ?? "").trim(), String(body.client_secret ?? "").trim());
+      // An empty secret reuses the one kept from a failed attempt (the page says so).
+      const outcome = await submit(
+        String(body.client_id ?? "").trim(),
+        String(body.client_secret ?? "").trim() || keptSecret || "",
+      );
       if (outcome.ok) {
         return json({
           ok: true,
@@ -695,6 +727,7 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
     if (outcome.ok) return Response.redirect(outcome.authorizeUrl, 303);
     if (clientId) lastClientId = clientId;
     if (outcome.status === 409) return page("Already in progress", outcome.message, 409, "err");
+    if (outcome.status === 429) return page("Too many tries", outcome.message, 429, "err");
     return pageNow({ error: { field: outcome.field, message: outcome.message } });
   };
 
@@ -739,6 +772,7 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
     let tokens: TokenResponse;
     try {
       tokens = await exchange(creds, code);
+      await opts.persist?.(tokens);
     } catch (err) {
       setPhase("failed", "WHOOP approved access, but finishing the connection failed. Ask Claude to try again.");
       throw err;

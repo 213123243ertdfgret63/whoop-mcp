@@ -53,10 +53,14 @@ function instrumentTools(server: McpServer): void {
   };
 }
 
-/** Whether saved tokens look usable: all scopes, refreshable, and not known to be dead in this process. */
+/**
+ * Whether saved tokens look usable: all scopes, refreshable, not known to be dead in this process, and the app
+ * credentials a refresh needs are still there.
+ */
 async function isConnected(client: WhoopClient): Promise<boolean> {
   const tokens = await readTokens();
   if (!tokens) return false;
+  if ((await credentialSource()) === "missing") return false;
   if (client.authProblem?.(tokens).session_expired) return false;
   const scopes = tokens.scope?.split(/\s+/) ?? [];
   if (SCOPES.some((s) => !scopes.includes(s))) return false;
@@ -73,7 +77,10 @@ const connectedResult = () =>
   });
 
 /** What whoop_login tells Claude: a script for the next step, not prose to show the user. */
-function loginResult(status: LoginStatus, ctx: { first: boolean; kind: "setup" | "login"; url: string }) {
+function loginResult(
+  status: LoginStatus,
+  ctx: { first: boolean; kind: "setup" | "login"; url: string; seenProblems: number },
+) {
   const again = `call whoop_login again right away with wait_seconds=${LOGIN_WAIT_SECONDS} (no reconfigure)`;
   switch (status.state) {
     case "succeeded":
@@ -99,7 +106,7 @@ function loginResult(status: LoginStatus, ctx: { first: boolean; kind: "setup" |
         ...(status.progress ? { progress: status.progress } : {}),
         ...(status.problem ? { problem: status.problem } : {}),
       };
-      if (status.problem) {
+      if (status.problem && (status.problemSeq ?? 0) > ctx.seenProblems) {
         return textResult(
           `The WHOOP page in the user's browser is showing a problem: "${status.problem.slice(0, 300)}" The page offers Try again. Tell the user that in one or two sentences, then ${again}.`,
           data,
@@ -123,8 +130,14 @@ function loginResult(status: LoginStatus, ctx: { first: boolean; kind: "setup" |
           : status.progress === "verifying"
             ? "checking the app's codes"
             : "approving access in WHOOP";
+      if (minutes >= 15) {
+        return textResult(
+          `The user has been on the WHOOP page for ${minutes} minutes. Stop calling whoop_login for now and ask them whether they're still connecting WHOOP or need help; call it again when they reply. The page stays open a while longer.`,
+          data,
+        );
+      }
       return textResult(
-        `Still waiting for the user (${minutes} min, ${step}). ${again[0]!.toUpperCase()}${again.slice(1)}. Say nothing to the user unless this passes 10 minutes; then ask once whether they need help.`,
+        `Still waiting for the user (${minutes} min, ${status.problem ? "the page is showing them a problem to fix" : step}). ${again[0]!.toUpperCase()}${again.slice(1)}. Say nothing to the user meanwhile.`,
         data,
       );
     }
@@ -260,10 +273,12 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
         if (!reconfigure && loginFlow.status.state !== "pending" && (await isConnected(client))) {
           return connectedResult();
         }
-        const wasPending = loginFlow.status.state === "pending";
+        const before = loginFlow.status;
         const { authorizeUrl, kind } = await loginFlow.start({ reconfigure });
+        // Problems already passed on to Claude aren't repeated on every call.
+        const seenProblems = before.state === "pending" ? (before.problemSeq ?? 0) : 0;
         const status = await loginFlow.waitForChange(wait_seconds * 1000, ctx?.mcpReq?.signal);
-        return loginResult(status, { first: !wasPending, kind, url: authorizeUrl });
+        return loginResult(status, { first: before.state !== "pending", kind, url: authorizeUrl, seenProblems });
       } catch (err) {
         return errorResult(err);
       }

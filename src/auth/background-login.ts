@@ -19,6 +19,8 @@ export type LoginStatus =
       startedAt: number;
       progress?: SetupPhase;
       problem?: string;
+      /** Counts problems reported so far, so whoop_login can tell a new one from one it already passed on. */
+      problemSeq?: number;
     }
   | { state: "succeeded"; at: number; scope?: string }
   | { state: "failed"; at: number; error: string };
@@ -109,9 +111,8 @@ export class BackgroundLogin {
       };
       const onChange = () => {
         const now = this.current;
-        if (now.state !== "pending" || (now.problem && now.problem !== (before as { problem?: string }).problem)) {
-          done();
-        }
+        const seqBefore = before.state === "pending" ? (before.problemSeq ?? 0) : 0;
+        if (now.state !== "pending" || (now.problemSeq ?? 0) > seqBefore) done();
       };
       const timer = setTimeout(done, ms);
       this.listeners.add(onChange);
@@ -184,6 +185,12 @@ export class BackgroundLogin {
         if (!(err instanceof ConfigError)) throw err; // no app credentials yet: collect them in the browser
       }
     }
+    // Cancelled or replaced while reading the credentials: don't start a second flow on the same port.
+    if (!isCurrent()) {
+      const now = this.current;
+      if (now.state === "pending") return { authorizeUrl: now.authorizeUrl, alreadyPending: true, kind: now.kind };
+      throw new Error("The WHOOP login was cancelled.");
+    }
     const kind = creds ? "login" : "setup";
     log.info("login started", { kind, reconfigure: forceSetup || undefined });
     const urlReady = Promise.withResolvers<string>();
@@ -193,9 +200,13 @@ export class BackgroundLogin {
     };
     const onPhase = (progress: SetupPhase, problem?: string) => {
       const now = this.current;
-      if (!isCurrent() || now.state !== "pending") return;
-      this.set({ ...now, progress, ...(problem ? { problem } : { problem: undefined }) });
+      // The end of the flow (done, failed) is reported by the flow's own outcome below, not as a problem.
+      if (!isCurrent() || now.state !== "pending" || progress === "done" || progress === "failed") return;
+      const isNew = Boolean(problem) && problem !== now.problem;
+      this.set({ ...now, progress, problem, problemSeq: (now.problemSeq ?? 0) + (isNew ? 1 : 0) });
     };
+    // The setup page saves the tokens itself (persist) before it tells the user they're connected.
+    let savedBySetup = false;
     const flow: Promise<LoginResult> = creds
       ? this.deps.login(creds, {
           openBrowser: this.deps.openBrowser,
@@ -212,6 +223,10 @@ export class BackgroundLogin {
             clientId: this.lastClientId,
             onSetupUrl: announce,
             onPhase,
+            persist: async (tokens) => {
+              await this.deps.save({ tokens });
+              savedBySetup = true;
+            },
             signal: controller.signal,
           })
           .then(({ creds, tokens }) => {
@@ -221,7 +236,7 @@ export class BackgroundLogin {
 
     const inFlight = flow
       .then(async (result) => {
-        await this.deps.save(result);
+        if (!savedBySetup) await this.deps.save(result);
         log.info("login succeeded", { kind, scope: result.tokens.scope });
         if (isCurrent()) this.set({ state: "succeeded", at: Date.now(), scope: result.tokens.scope });
       })

@@ -47,11 +47,18 @@ export function buildAuthorizeUrl(opts: {
   return url.toString();
 }
 
-/** WHOOP gets this long to answer a token request; a stalled exchange must not hold a login open forever. */
-const TOKEN_TIMEOUT_MS = 20_000;
+/** WHOOP gets this long to answer a code exchange; a stalled one must not hold a login open forever. */
+const EXCHANGE_TIMEOUT_MS = 20_000;
 
-/** Posts to WHOOP's token endpoint with the client secret in the form body (client_secret_post). */
-async function postToken(creds: ClientCredentials, params: Record<string, string>): Promise<TokenResponse> {
+/**
+ * Posts to WHOOP's token endpoint with the client secret in the form body (client_secret_post). `timeoutMs`
+ * aborts the request; refreshes pass none (see refreshTokens).
+ */
+async function postToken(
+  creds: ClientCredentials,
+  params: Record<string, string>,
+  timeoutMs?: number,
+): Promise<TokenResponse> {
   const body = new URLSearchParams({ ...params, client_id: creds.clientId, client_secret: creds.clientSecret });
   let res: Response;
   try {
@@ -59,7 +66,7 @@ async function postToken(creds: ClientCredentials, params: Record<string, string
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
       body,
-      signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
+      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     });
   } catch (err) {
     if ((err as Error).name === "TimeoutError")
@@ -72,13 +79,18 @@ async function postToken(creds: ClientCredentials, params: Record<string, string
 }
 
 export function exchangeCode(creds: ClientCredentials, code: string): Promise<TokenResponse> {
-  return postToken(creds, { grant_type: "authorization_code", code, redirect_uri: creds.redirectUri });
+  return postToken(
+    creds,
+    { grant_type: "authorization_code", code, redirect_uri: creds.redirectUri },
+    EXCHANGE_TIMEOUT_MS,
+  );
 }
 
 /**
  * WHOOP refresh tokens are single-use: a successful refresh invalidates the old refresh token
  * (and existing access tokens). Callers must persist the result before using it.
  */
+/** Never aborted: WHOOP may already have used up the old refresh token, so the reply must still be saved. */
 export function refreshTokens(creds: ClientCredentials, refreshToken: string): Promise<TokenResponse> {
   return postToken(creds, { grant_type: "refresh_token", refresh_token: refreshToken, scope: "offline" });
 }

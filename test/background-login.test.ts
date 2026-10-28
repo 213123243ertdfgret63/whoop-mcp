@@ -223,3 +223,48 @@ describe("BackgroundLogin", () => {
     expect(flow.status).toMatchObject({ state: "pending" });
   });
 });
+
+describe("review fixes", () => {
+  test("a login cancelled while it reads the credentials doesn't start a flow", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const started: string[] = [];
+    const flow = new BackgroundLogin({
+      openBrowser: false,
+      resolveCreds: async () => {
+        await gate;
+        return creds;
+      },
+      login: () => {
+        started.push("login");
+        return new Promise(() => {});
+      },
+    });
+    const first = flow.start().catch((e: Error) => e.message);
+    await flow.cancel();
+    release();
+    expect(await first).toContain("cancelled");
+    expect(started).toEqual([]);
+  });
+
+  test("the end of a setup flow isn't reported as a page problem", async () => {
+    let phase: ((p: "failed", problem: string) => void) | undefined;
+    const flow = new BackgroundLogin({
+      openBrowser: false,
+      resolveCreds: async () => {
+        throw new ConfigError("none");
+      },
+      setup: (opts) =>
+        new Promise(() => {
+          queueMicrotask(() => opts.onSetupUrl?.("http://localhost:8787/setup?t=x"));
+          phase = (p, problem) => opts.onPhase?.(p, problem);
+        }),
+    });
+    await flow.start();
+    phase?.("failed", "timed out");
+    expect(flow.status).toMatchObject({ state: "pending" });
+    expect((flow.status as { problem?: string }).problem).toBeUndefined();
+  });
+});

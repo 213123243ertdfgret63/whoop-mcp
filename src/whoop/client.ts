@@ -55,6 +55,8 @@ export class WhoopApiError extends Error {
 const REFRESH_SKEW_MS = 60_000;
 /** WHOOP gets this long per request; a stalled one must not hang a tool call (Claude gives up at about 60s). */
 const REQUEST_TIMEOUT_MS = 20_000;
+/** How long a tool call waits for a token refresh; the refresh itself carries on and saves its result. */
+const REFRESH_WAIT_MS = 25_000;
 const MAX_RATE_LIMIT_RETRIES = 2;
 const MAX_RETRY_DELAY_MS = 30_000;
 
@@ -94,7 +96,7 @@ export class WhoopClient {
       log.info("access token rejected, re-reading the token file", { path });
       const latest = await readTokens();
       if (!latest) throw new NotLoggedInError(); // logged out elsewhere: don't resurrect the session
-      tokens = latest.access_token !== tokens.access_token ? latest : await this.refresh(latest);
+      tokens = latest.access_token !== tokens.access_token ? latest : await this.refreshed(latest);
       res = await this.send(url, tokens.access_token);
     }
     for (let attempt = 0; res.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES; attempt++) {
@@ -158,7 +160,26 @@ export class WhoopClient {
       throw new SessionExpiredError();
     }
     if (tokens.expires_at - REFRESH_SKEW_MS > Date.now()) return tokens;
-    return this.refresh(tokens);
+    return this.refreshed(tokens);
+  }
+
+  /**
+   * The refresh, but a caller stops waiting after REFRESH_WAIT_MS. The request is never aborted: WHOOP may
+   * already have spent the old refresh token, so its reply must still be saved when it arrives.
+   */
+  private async refreshed(tokens: StoredTokens): Promise<StoredTokens> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const slow = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("WHOOP is slow to renew the login; try again in a moment.")),
+        REFRESH_WAIT_MS,
+      );
+    });
+    try {
+      return await Promise.race([this.refresh(tokens), slow]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Single-flight within this process. */
