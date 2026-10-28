@@ -106,7 +106,7 @@ Download the new `.mcpb` from the [latest release](https://github.com/213123243e
 
 The first time a new version reads the saved credentials, macOS may ask you to allow keychain access.
 
-To see which version you have, look under **Settings → Extensions**, or ask Claude for `whoop_status` (`server_version`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+To see which version you have, look for **WHOOP (unofficial)** under **Settings → Extensions**, or ask Claude for `whoop_status` (`server_version`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Logs
 
@@ -115,11 +115,11 @@ The server keeps its own log of what it did: start-up, each tool call (name, arg
 - macOS: `~/Library/Logs/whoop-mcp/whoop-mcp.log` (also visible in the Console app)
 - Windows: `%LOCALAPPDATA%\whoop-mcp\Logs\whoop-mcp.log`
 
-It rotates at 5 MB and keeps three old files. `whoop_status` reports the path. Warnings and errors also appear in Claude Desktop's own log (`~/Library/Logs/Claude/mcp-server-whoop-mcp.log`). For more detail, set `WHOOP_MCP_LOG_LEVEL=debug` (or `warn`, `error`; `WHOOP_MCP_LOG_FILE=off` turns the file off) when running from source.
+It rotates at 5 MB and keeps three old files. `whoop_status` reports the path. Warnings and errors also appear in Claude Desktop's own log (`~/Library/Logs/Claude/mcp-server-WHOOP (unofficial).log`). For more detail, set `WHOOP_MCP_LOG_LEVEL=debug` (or `warn`, `error`; `WHOOP_MCP_LOG_FILE=off` turns the file off) when running from source.
 
 ## Uninstall
 
-1. Ask Claude to "disconnect WHOOP and forget the app" first: that revokes access at WHOOP and deletes the saved login and app credentials. Then, in Claude Desktop, open **Settings → Extensions**, choose **whoop-mcp** and click **Uninstall**.
+1. Ask Claude to "disconnect WHOOP and forget the app" first: that revokes access at WHOOP and deletes the saved login and app credentials. Then, in Claude Desktop, open **Settings → Extensions**, choose **WHOOP (unofficial)** and click **Uninstall**.
 2. To also delete your saved WHOOP login, app credentials and logs:
 
    On macOS:

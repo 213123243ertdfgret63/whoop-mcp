@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
  * Logging for the server: one line per event, to a rotating file and to stderr.
  *
  * stdout belongs to the MCP stdio transport, so nothing is ever written there. Claude Desktop also copies
- * stderr into its own log (~/Library/Logs/Claude/mcp-server-whoop-mcp.log), but that file mixes in the protocol
+ * stderr into its own log (~/Library/Logs/Claude/mcp-server-WHOOP (unofficial).log), but that file mixes in the protocol
  * traffic and is cut by Desktop; ours keeps only the server's own events.
  *
  * What is logged: startup and shutdown, every tool call (name, arguments, duration, outcome), every WHOOP API

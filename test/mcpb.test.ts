@@ -36,6 +36,9 @@ describe("extension manifest", () => {
     // Settings from Desktop don't reliably reach the server (mcpb#297); the setup page collects credentials.
     expect(m).not.toHaveProperty("user_config");
     expect(String(m.description)).toContain("unofficial");
+    // The ID Desktop derives from `name` must not change, or upgrades install next to the old extension.
+    expect(m.name).toBe("whoop-mcp");
+    expect(m.display_name).toBe("WHOOP (unofficial)");
   });
 });
 

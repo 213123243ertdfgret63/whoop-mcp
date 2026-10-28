@@ -86,7 +86,9 @@ function manifest(bundle: Bundle, tools: { name: string; description: string }[]
   return {
     manifest_version: "0.3",
     name: "whoop-mcp",
-    display_name: "whoop-mcp",
+    // Shown in Claude Desktop. "unofficial" so it isn't taken for WHOOP's own product; `name` stays whoop-mcp,
+    // because changing it gives the extension a new ID and installs it next to the old one.
+    display_name: "WHOOP (unofficial)",
     version: VERSION,
     description: "Your WHOOP recovery, sleep, strain and workouts in Claude (read-only, unofficial).",
     long_description: LONG_DESCRIPTION,
