@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.0 (2026-10-28)
+
+- Ship as a Claude Desktop extension and log to a file (58e29df)
+- Explain what the server can do in the README (04348bb)
+
 ## v0.2.1 (2026-10-28)
 
 - Fix dead logins, whoop_today gaps and oversized output (v0.2.1 fixes) (9fed2ae)
