@@ -184,9 +184,9 @@ describe("resolveClientCredentials", () => {
     expect(err).toBeInstanceOf(ConfigError);
   });
 
-  test("throws a ConfigError pointing at `whoop-mcp setup` when nothing is configured", async () => {
+  test("throws a ConfigError pointing at whoop_login when nothing is configured", async () => {
     const err = await resolveClientCredentials({}).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ConfigError);
-    expect((err as Error).message).toContain("whoop-mcp setup");
+    expect((err as Error).message).toContain("whoop_login");
   });
 });

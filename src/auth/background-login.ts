@@ -1,4 +1,5 @@
 import { type ClientCredentials, ConfigError, DEFAULT_REDIRECT_URI, envValue } from "../config.ts";
+import { errorFields, log } from "../log.ts";
 import { type BrowserSetupOptions, type BrowserSetupResult, browserSetup } from "./browser-setup.ts";
 import { resolveClientCredentials } from "./credentials.ts";
 import { type LoginOptions, type LoginResult, login } from "./login.ts";
@@ -114,6 +115,7 @@ export class BackgroundLogin {
       }
     }
     const kind = creds ? "login" : "setup";
+    log.info("login started", { kind, reconfigure: forceSetup || undefined });
     const urlReady = Promise.withResolvers<string>();
     const announce = (authorizeUrl: string) => {
       if (isCurrent()) this.current = { state: "pending", kind, authorizeUrl, startedAt: Date.now() };
@@ -139,9 +141,14 @@ export class BackgroundLogin {
     const inFlight = flow
       .then(async (result) => {
         await this.deps.save(result);
+        log.info("login succeeded", { kind, scope: result.tokens.scope });
         if (isCurrent()) this.current = { state: "succeeded", at: Date.now(), scope: result.tokens.scope };
       })
       .catch((err: unknown) => {
+        log.write(isCurrent() ? "warn" : "info", isCurrent() ? "login failed" : "login cancelled", {
+          kind,
+          ...errorFields(err),
+        });
         if (isCurrent()) {
           this.current = { state: "failed", at: Date.now(), error: err instanceof Error ? err.message : String(err) };
         }

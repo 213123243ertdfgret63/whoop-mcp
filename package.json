@@ -21,7 +21,8 @@
     "inspect": "bunx @modelcontextprotocol/inspector bun run src/index.ts",
     "build": "bun build src/index.ts --compile --minify --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile dist/whoop-mcp",
     "release": "bun run scripts/release.ts",
-    "prepare": "husky && bun run gen:types"
+    "prepare": "husky && bun run gen:types",
+    "build:mcpb": "bun run scripts/build-mcpb.ts"
   },
   "overrides": {
     "zod": "^4.2.0"
@@ -31,6 +32,7 @@
     "zod": "^4.2.0"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2",
     "@biomejs/biome": "2.6.3",
     "@modelcontextprotocol/client": "2.4.0",
     "@types/bun": "^1.4.4",

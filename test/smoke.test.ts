@@ -67,7 +67,7 @@ for (const [label, options, expectedVersion] of eras) {
 
         const profile = await client.callTool({ name: "whoop_profile", arguments: {} });
         expect(profile.isError).toBe(true);
-        expect(text(profile)).toContain("whoop-mcp login");
+        expect(text(profile)).toContain("whoop_login");
       } finally {
         await client.close();
       }

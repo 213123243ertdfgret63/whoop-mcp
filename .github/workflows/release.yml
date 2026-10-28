@@ -16,7 +16,9 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # macOS: the Mac binaries must be ad-hoc signed (codesign) to run on Apple Silicon, and the bundles must be
+    # zipped with Unix file modes.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
         with:
@@ -53,17 +55,13 @@ jobs:
           bun run typecheck
           bun test
 
-      - name: Build binaries
+      - name: Build the Claude Desktop extensions
         run: |
-          mkdir -p dist
-          for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64 windows-x64; do
-            ext=""; [ "$target" = "windows-x64" ] && ext=".exe"
-            bun build src/index.ts --compile --minify \
-              --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
-              --target="bun-$target" --outfile "dist/whoop-mcp-$target$ext"
-          done
-          ./dist/whoop-mcp-linux-x64 --version
-          (cd dist && sha256sum whoop-mcp-* > SHA256SUMS)
+          bun run build:mcpb
+          # Smoke test: the Mac bundle starts through its launcher on this (Apple Silicon) runner.
+          mkdir -p dist/check && unzip -q dist/whoop-mcp-macos.mcpb -d dist/check
+          test "$(/bin/sh dist/check/server/launch.sh --version)" = "${GITHUB_REF_NAME#v}"
+          (cd dist && shasum -a 256 whoop-mcp-*.mcpb > SHA256SUMS)
 
       - name: Release notes from CHANGELOG.md
         run: |
@@ -81,12 +79,12 @@ jobs:
         run: |
           # Re-runs (e.g. after a failed upload) replace the assets instead of failing on the existing release.
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" --clobber dist/whoop-mcp-* dist/SHA256SUMS
+            gh release upload "$GITHUB_REF_NAME" --clobber dist/whoop-mcp-*.mcpb dist/SHA256SUMS
             gh release edit "$GITHUB_REF_NAME" --notes-file dist/NOTES.md --draft=false
           else
             gh release create "$GITHUB_REF_NAME" \
               --title "$GITHUB_REF_NAME" \
               --notes-file dist/NOTES.md \
               --verify-tag \
-              dist/whoop-mcp-* dist/SHA256SUMS
+              dist/whoop-mcp-*.mcpb dist/SHA256SUMS
           fi

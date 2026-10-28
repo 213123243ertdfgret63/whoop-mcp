@@ -3,10 +3,9 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { BackgroundLogin } from "./auth/background-login.ts";
 import { deleteStoredCredentials, readStoredCredentials, resolveClientCredentials } from "./auth/credentials.ts";
 import { deleteTokens, readTokens, tokenPath } from "./auth/store.ts";
-import { addToClaude, currentServerCommand, describeResults, removeFromClaude } from "./cli/claude-config.ts";
 import { terminalIO } from "./cli/terminal.ts";
 import { VERSION } from "./config.ts";
-import { log } from "./log.ts";
+import { errorFields, log } from "./log.ts";
 import { createServer } from "./server.ts";
 import { loginAndSave, runSetup } from "./setup.ts";
 import { WhoopClient } from "./whoop/client.ts";
@@ -27,16 +26,33 @@ Usage: whoop-mcp <command>
   login [--no-browser]  Log in with the browser using the saved credentials
   status                Show credential and login state
   logout [--forget-app] Delete saved tokens (and, with --forget-app, the app credentials)
-  claude add            Register this server with Claude Code and Claude Desktop (whichever are installed)
-      --command <path>    Executable Claude should run (default: this binary, or bun + src/index.ts)
-  claude remove         Unregister it from both
   version               Print the version`;
 
 async function main(): Promise<void> {
   switch (command) {
     case "serve":
-      // Goes to the client's MCP log (stderr), so you can tell which build a client is running.
-      log(`v${VERSION} starting (stdio)`);
+      // Claude Desktop copies stderr into its own log; keep that to problems and the details in our file.
+      log.configure({ ...process.env, WHOOP_MCP_LOG_STDERR_LEVEL: process.env.WHOOP_MCP_LOG_STDERR_LEVEL ?? "warn" });
+      log.info("starting", {
+        version: VERSION,
+        pid: process.pid,
+        platform: `${process.platform}-${process.arch}`,
+        bun: Bun.version,
+        log_level: log.settings().level,
+        log_file: log.settings().file ?? "off",
+      });
+      process.on("uncaughtException", (err) => {
+        log.error("uncaught exception", { ...errorFields(err), stack: err.stack });
+        process.exit(1);
+      });
+      process.on("unhandledRejection", (reason) => log.error("unhandled rejection", errorFields(reason)));
+      for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+        process.once(signal, () => {
+          log.info("stopping", { signal });
+          process.exit(0);
+        });
+      }
+      process.once("exit", (exitCode) => log.info("exited", { exit_code: exitCode }));
       {
         // One login flow and one API client per process, shared by whichever protocol-era instance serves the
         // connection, so token refreshes stay single-flight across instances.
@@ -45,7 +61,14 @@ async function main(): Promise<void> {
         serveStdio(() => createServer(client, loginFlow));
         // When the client goes away mid-login, close the local login server so this process can exit and
         // doesn't keep the callback port busy for the next session.
-        process.stdin.once("end", () => void loginFlow.cancel());
+        process.stdin.once("end", () => {
+          log.info("client disconnected (stdin closed)");
+          // Exit even if something (the login callback server, a timer, a keep-alive socket) holds the
+          // event loop: on Windows Desktop hard-kills the server, and stdin EOF is the only goodbye. First let
+          // a token refresh finish saving: WHOOP has already spent the old refresh token.
+          setTimeout(() => process.exit(0), 10_000).unref();
+          void Promise.allSettled([loginFlow.cancel(), client.drain()]).then(() => process.exit(0));
+        });
       }
       return;
 
@@ -98,32 +121,6 @@ async function main(): Promise<void> {
         print((await deleteStoredCredentials()) ? "Deleted saved app credentials." : "No saved app credentials.");
       }
       return;
-
-    case "claude": {
-      const [action] = rest;
-      if (action !== "add" && action !== "remove") {
-        print(USAGE);
-        process.exitCode = 2;
-        return;
-      }
-      const results =
-        action === "add"
-          ? await addToClaude(
-              rest.includes("--command")
-                ? { command: rest[rest.indexOf("--command") + 1] ?? "", args: [] }
-                : currentServerCommand(),
-            )
-          : await removeFromClaude();
-      print(
-        `${action === "add" ? "Adding whoop to Claude" : "Removing whoop from Claude"}:\n${describeResults(results)}`,
-      );
-      if (results.some((r) => r.outcome === "failed")) process.exitCode = 1;
-      else if (action === "add" && results.every((r) => r.outcome === "skipped")) {
-        print("Neither Claude Code nor Claude Desktop was found.");
-        process.exitCode = 1;
-      }
-      return;
-    }
 
     case "help":
     case "--help":

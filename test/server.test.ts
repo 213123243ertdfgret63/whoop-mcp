@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -126,6 +126,7 @@ describe("whoop_status", () => {
       app_credentials: "missing",
       login: { state: "idle" },
       token_file: join(home, "tokens.json"),
+      log_file: null,
       scopes: [],
       missing_scopes: [...SCOPES],
       access_token_expires_in_s: null,
@@ -267,7 +268,7 @@ describe("whoop_profile", () => {
     const result = await client.callTool({ name: "whoop_profile", arguments: {} });
     expect(result.isError).toBe(true);
     expect(text(result)).toBe(new NotLoggedInError().message);
-    expect(text(result)).toContain("whoop-mcp login");
+    expect(text(result)).toContain("whoop_login");
   });
 
   test("turns WhoopApiError into an error result with status, path and trace id", async () => {
@@ -595,5 +596,25 @@ describe("whoop_baselines", () => {
     expect(data.current_cycle_date).toBe(cycleDate({ start: openStart, timezone_offset: "Z" }));
     expect(data.in_progress).toBe(true);
     expect(data.baselines[0]).toMatchObject({ metric: "strain", today: null, today_so_far: 10, z_score: null });
+  });
+});
+
+describe("tool-call logging", () => {
+  test("logs the final outcome, including calls the SDK rejects before the tool runs", async () => {
+    const lines: string[] = [];
+    const spy = spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      lines.push(a.map(String).join(" "));
+    });
+    try {
+      const { client } = await connect();
+      await client.callTool({ name: "whoop_profile", arguments: {} });
+      await client.callTool({ name: "whoop_daily_summaries", arguments: { start_date: "yesterday" } });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines.some((l) => /INFO {2}tool whoop_profile ok ms=\d+/.test(l))).toBe(true);
+    expect(lines.some((l) => /WARN {2}tool whoop_daily_summaries error .*start_date/.test(l))).toBe(true);
+    // Results are WHOOP data and never logged.
+    expect(lines.join("\n")).not.toContain("Lovelace");
   });
 });

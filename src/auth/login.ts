@@ -91,7 +91,7 @@ export function listenLocal(
       servers.push(Bun.serve({ hostname, port, fetch, maxRequestBodySize: opts.maxRequestBodySize }));
     } catch (err) {
       for (const s of servers) s.stop(true);
-      log(`could not listen on ${hostname}:${port}: ${(err as Error).message}`);
+      log.warn("could not listen for the login callback", { host: hostname, port, error: (err as Error).message });
       throw new PortInUseError(
         `Port ${port} is already in use${hosts.length > 1 ? ` (on ${hostname})` : ""}, so WHOOP can't redirect back here. ` +
           "Another WHOOP login (e.g. in a second Claude window) or another program is using it; finish or close that and try again.",
@@ -170,7 +170,7 @@ export async function login(creds: ClientCredentials, opts: LoginOptions = {}): 
   if (opts.signal?.aborted) onAbort();
   opts.signal?.addEventListener("abort", onAbort, { once: true });
 
-  log(`Open this URL to authorize WHOOP access:\n\n  ${authorizeUrl}\n`);
+  log.info("open this URL to authorize WHOOP access", { url: authorizeUrl });
   opts.onAuthorizeUrl?.(authorizeUrl);
   if (opts.openBrowser ?? true) openUrl(authorizeUrl);
 

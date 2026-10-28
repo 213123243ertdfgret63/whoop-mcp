@@ -1,6 +1,6 @@
 # whoop-mcp
 
-An [MCP](https://modelcontextprotocol.io) server that gives Claude your [WHOOP](https://www.whoop.com) data: recovery, sleep, strain, workouts and profile. It uses WHOOP's official Developer API (v2) through your own free WHOOP developer app, reads data only, and runs locally on your computer.
+A [Claude Desktop](https://claude.ai/download) extension that gives Claude your [WHOOP](https://www.whoop.com) data: recovery, sleep, strain, workouts and profile. It uses WHOOP's official Developer API (v2) through your own free WHOOP developer app, reads data only, and runs locally on your computer as an [MCP](https://modelcontextprotocol.io) server.
 
 Not affiliated with or endorsed by WHOOP. Nothing it returns is medical advice.
 
@@ -50,36 +50,26 @@ Once it's connected, you talk to Claude normally and it fetches whatever WHOOP d
 - **Remember anything between chats.** It has no goals, injuries, training plan or daily log of its own. You can keep these in a Claude Project or a notes file for now. A local planning store (goals, weekly plan, daily check-ins) is the next release.
 - **Write to WHOOP.** It reads data only. WHOOP's API has no Journal, Stress Monitor, Strength Trainer sets or live heart rate, so Claude can't see those.
 - **Give medical advice.** It's a planning and logging aid. For symptoms, injuries or anything clinical, see a professional.
-- **Run on its own schedule, or on your phone.** It runs on your computer while Claude is open there. You can schedule a morning check-in with Claude Desktop's scheduled tasks, but your computer has to be awake.
+- **Run on your phone or on claude.ai.** It runs inside Claude Desktop on your computer, so it works only there, while the app is open.
 
 ## Install
 
-On macOS or Linux, run:
+Claude Desktop on macOS (Apple Silicon or Intel). A Windows build is published too, but hasn't been tested yet.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/213123243ertdfgret63/whoop-mcp/main/install.sh | sh
-```
+1. Download **`whoop-mcp-macos.mcpb`** (or `whoop-mcp-windows.mcpb`) from the [latest release](https://github.com/213123243ertdfgret63/whoop-mcp/releases/latest).
+2. Double-click it. Claude Desktop opens an install dialog listing the tools; click **Install**.
+   You can also drag the file onto **Settings → Extensions** in Claude Desktop.
+3. Start a new chat and ask Claude to **"connect WHOOP"** (see below).
 
-The script:
+The extension needs no settings: the WHOOP app credentials are entered on a setup page the first time you connect.
 
-1. Downloads the `whoop-mcp` binary for your platform from the [latest release](https://github.com/213123243ertdfgret63/whoop-mcp/releases/latest) and checks it against the release's `SHA256SUMS`. No Bun or Node is needed.
-2. Installs it to `~/.whoop-mcp/bin/whoop-mcp`.
-3. Adds a `whoop` MCP server to **Claude Code** (via `claude mcp add --scope user`, also used by the desktop app's Code tab) and to **Claude Desktop** (`claude_desktop_config.json`), whichever you have. Your other settings and servers are left as they are.
+If you used a version before 0.3 (installed with `install.sh`), remove it first, or its old `whoop` server runs next to the extension and duplicates the tools:
 
-If the Claude desktop app is running, the installer asks **"Restart Claude now? [y/N]"**. The app rewrites its config when it quits, so it has to restart to keep the new entry:
+1. Quit Claude Desktop (Cmd+Q). It rewrites its config file when it quits, so edit the file only while it's closed.
+2. Delete the `whoop` entry under `mcpServers` in `~/Library/Application Support/Claude/claude_desktop_config.json`.
+3. Delete `~/.whoop-mcp`. If you also used it in Claude Code, run `claude mcp remove whoop --scope user`.
 
-- **Yes:** Claude quits (confirm if it asks), whoop is added once Claude has closed, and Claude reopens. If Claude doesn't quit, nothing is changed and the installer says what to run instead.
-- **No:** quit Claude yourself (Cmd+Q), run `~/.whoop-mcp/bin/whoop-mcp claude add`, and reopen it.
-
-In Claude Code, start a new session to pick up the server. `WHOOP_MCP_RESTART_CLAUDE=yes` or `=no` answers the question ahead of time. The uninstaller asks the same question.
-
-Options, as environment variables before `sh`:
-
-- `WHOOP_MCP_VERSION=0.1.0` installs a specific release.
-- `WHOOP_MCP_INSTALL_DIR=…` installs somewhere else.
-- `WHOOP_MCP_NO_CLAUDE=1` installs only the binary.
-
-On Windows, download `whoop-mcp-windows-x64.exe` from the [latest release](https://github.com/213123243ertdfgret63/whoop-mcp/releases/latest) and run `whoop-mcp-windows-x64.exe claude add`.
+Your WHOOP login and app credentials are kept and work with the extension.
 
 ## Connect your WHOOP account
 
@@ -105,28 +95,37 @@ After that, `whoop_login` goes straight to WHOOP's consent screen. If WHOOP show
 
 - The setup page runs only on your computer (`localhost`), behind a one-time link, and refuses requests from other websites.
 - Tokens are stored in `~/.config/whoop-mcp/tokens.json` (owner-only). The app credentials are stored in your system keychain (service `whoop-mcp`), or in a private file next to the tokens when there's no keychain.
-- If you prefer the terminal: `~/.whoop-mcp/bin/whoop-mcp setup`.
 
 ## Update
 
-Run the install command again. It replaces the binary in place, so Claude's configuration stays valid. Then restart Claude, because MCP servers are started once and keep running the old version. Your saved login is kept.
+Download the new `.mcpb` from the [latest release](https://github.com/213123243ertdfgret63/whoop-mcp/releases/latest) and install it the same way. Claude Desktop replaces the old version; your WHOOP login and app credentials are kept, because they live outside the extension. Extensions installed from a file don't update themselves.
 
-The first time a new binary reads the saved credentials, macOS may ask you to allow keychain access.
+The first time a new version reads the saved credentials, macOS may ask you to allow keychain access.
 
-To see which version you have:
+To see which version you have, look under **Settings → Extensions**, or ask Claude for `whoop_status` (`server_version`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
-- run `~/.whoop-mcp/bin/whoop-mcp --version`
-- check the `server_version` field in `whoop_status`
+## Logs
 
-Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+The server keeps its own log of what it did: start-up, each tool call (name, arguments, duration, outcome), each WHOOP request (path, status, duration), token refreshes and login steps. It never logs tokens, secrets or your WHOOP data.
+
+- macOS: `~/Library/Logs/whoop-mcp/whoop-mcp.log` (also visible in the Console app)
+- Windows: `%LOCALAPPDATA%\whoop-mcp\Logs\whoop-mcp.log`
+
+It rotates at 5 MB and keeps three old files. `whoop_status` reports the path. Warnings and errors also appear in Claude Desktop's own log (`~/Library/Logs/Claude/mcp-server-whoop-mcp.log`). For more detail, set `WHOOP_MCP_LOG_LEVEL=debug` (or `warn`, `error`; `WHOOP_MCP_LOG_FILE=off` turns the file off) when running from source.
 
 ## Uninstall
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/213123243ertdfgret63/whoop-mcp/main/uninstall.sh | sh
-```
+1. In Claude Desktop, open **Settings → Extensions**, choose **whoop-mcp** and click **Uninstall**.
+2. To also delete your saved WHOOP login, app credentials and logs:
 
-It removes `whoop` from Claude Code and Claude Desktop, deletes the saved WHOOP tokens and app credentials, and deletes `~/.whoop-mcp`. To keep the saved login for a later reinstall, run `… | sh -s -- --keep-data` instead.
+   On macOS:
+
+   ```bash
+   rm -rf ~/.config/whoop-mcp ~/Library/Logs/whoop-mcp
+   security delete-generic-password -s whoop-mcp
+   ```
+
+   On Windows, delete the `whoop-mcp` entry in **Credential Manager → Windows Credentials**, then the folders `%USERPROFILE%\.config\whoop-mcp` and `%LOCALAPPDATA%\whoop-mcp`.
 
 You can also revoke the app's access, or delete the app, in the [WHOOP developer dashboard](https://developer-dashboard.whoop.com).
 
@@ -156,14 +155,26 @@ Dates are your local dates, and a WHOOP day runs from sleep to sleep, not midnig
 
 ```bash
 git clone https://github.com/213123243ertdfgret63/whoop-mcp.git && cd whoop-mcp
-bun install                   # Bun 1.4+; also generates the API types
-bun src/index.ts claude add   # registers `bun …/src/index.ts` with Claude Code and Claude Desktop
+bun install            # Bun 1.4+; also generates the API types
+bun run build:mcpb     # builds dist/whoop-mcp-macos.mcpb and dist/whoop-mcp-windows.mcpb
 ```
 
-`bun src/index.ts claude remove` unregisters it.
+Install `dist/whoop-mcp-macos.mcpb` as above. To run the code straight from the checkout instead, add a server to `~/Library/Application Support/Claude/claude_desktop_config.json` (give it a different name, because an entry there overrides an extension with the same name) and restart Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "whoop-dev": {
+      "command": "/absolute/path/to/bun",
+      "args": ["/absolute/path/to/whoop-mcp/src/index.ts"]
+    }
+  }
+}
+```
 
 - **Credentials:** `WHOOP_CLIENT_ID` and `WHOOP_CLIENT_SECRET` env vars (see `.env.example`) take precedence over saved credentials, but only when both are set.
-- **Updating:** `git pull && bun install`. `main` can be ahead of the last release. To run exactly a released version, check out its tag, for example `git checkout v0.1.0`.
+- **Terminal commands:** `bun src/index.ts setup | login | status | logout` do the same as the tools, from a terminal.
+- **Updating:** `git pull && bun install`. `main` can be ahead of the last release. To run exactly a released version, check out its tag, for example `git checkout v0.2.1`.
 
 ### Cutting a release
 
@@ -181,20 +192,31 @@ From a clean `main` that's in sync with `origin`, this does the following:
 
 `--push` pushes `main` and the tag together, so either both land or neither does.
 
-Pushing the tag runs `.github/workflows/release.yml`. It checks that the tag matches `package.json` and is on `main`, reruns the checks, and cross-compiles binaries for macOS, Linux and Windows. It then publishes a GitHub release with checksums and the changelog notes. That release is what `install.sh` downloads.
+Pushing the tag runs `.github/workflows/release.yml` on a macOS runner. It checks that the tag matches `package.json` and is on `main`, reruns the checks, and builds the two extension bundles with `bun run build:mcpb`. It then checks that the Mac bundle starts, and publishes a GitHub release with the bundles, checksums and the changelog notes.
+
+### How the bundles are built
+
+`scripts/build-mcpb.ts` compiles the server with `bun build --compile` and packs it with the pinned `@anthropic-ai/mcpb` CLI:
+
+- **macOS:** one bundle with both the arm64 and x64 binaries (ad-hoc signed) and `server/launch.sh`, which picks the right one. MCP bundles have no CPU-architecture field ([mcpb#10](https://github.com/modelcontextprotocol/mcpb/issues/10)). The launcher also restores the execute bit, which some Desktop builds drop when unpacking ([mcpb#294](https://github.com/modelcontextprotocol/mcpb/issues/294)).
+- **Windows:** the x64 `.exe`.
+- The tool list in each manifest comes from the server itself, so the install dialog can't drift from the code.
+- Bundles must be packed on macOS or Linux, so the zip keeps Unix file modes. The build fails if an executable isn't stored as executable.
+- They're not signed: `mcpb sign` 2.1.2 makes bundles Claude Desktop refuses to install ([mcpb#278](https://github.com/modelcontextprotocol/mcpb/issues/278)).
 
 ## Development
 
-| Command                                                 | What it does                                                                                                                 |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `bun test`                                              | Test suite, including stdio smoke tests for both MCP protocol versions and end-to-end tests of `install.sh` / `uninstall.sh` |
-| `bun run typecheck`                                     | `tsc --noEmit`                                                                                                               |
-| `bun run lint` / `bun run format`                       | Runs Biome's checks / runs them and applies fixes                                                                            |
-| `bun run inspect`                                       | Opens MCP Inspector against the server                                                                                       |
-| `bun run spec:update`                                   | Refreshes `openapi/whoop.yaml` from WHOOP's published spec (review with `git diff openapi/`)                                 |
-| `bun run gen:types`                                     | Generates `src/whoop/openapi.d.ts` from `openapi/whoop.yaml`; runs automatically on `bun install`                            |
-| `bun run release <patch\|minor\|major>`                 | Cuts a release (see [Cutting a release](#cutting-a-release))                                                                 |
-| `bun run build`                                         | Builds a single-file binary at `dist/whoop-mcp`                                                                              |
-| `bun scripts/m0-probe.ts <public\|login\|refresh\|api>` | The M0 verification probes (see `docs/verification.md`)                                                                      |
-- **CI** (`.github/workflows/ci.yml`) runs lint, typecheck, tests and a compiled-binary smoke test on Ubuntu for every push to `main` and every pull request. Trigger it manually to include macOS. The Bun version comes from `.bun-version`.
+| Command                                                 | What it does                                                                                                         |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `bun test`                                              | Test suite, including stdio smoke tests for both MCP protocol versions                                               |
+| `bun run typecheck`                                     | `tsc --noEmit`                                                                                                       |
+| `bun run lint` / `bun run format`                       | Runs Biome's checks / runs them and applies fixes                                                                    |
+| `bun run inspect`                                       | Opens MCP Inspector against the server                                                                               |
+| `bun run spec:update`                                   | Refreshes `openapi/whoop.yaml` from WHOOP's published spec (review with `git diff openapi/`)                         |
+| `bun run gen:types`                                     | Generates `src/whoop/openapi.d.ts` from `openapi/whoop.yaml`; runs automatically on `bun install`                    |
+| `bun run release <patch\|minor\|major>`                 | Cuts a release (see [Cutting a release](#cutting-a-release))                                                         |
+| `bun run build`                                         | Builds a single-file binary for this machine at `dist/whoop-mcp`                                                     |
+| `bun run build:mcpb [macos\|windows]`                   | Builds the Claude Desktop extension bundles in `dist/` (see [How the bundles are built](#how-the-bundles-are-built)) |
+| `bun scripts/m0-probe.ts <public\|login\|refresh\|api>` | The M0 verification probes (see `docs/verification.md`)                                                              |
+- **CI** (`.github/workflows/ci.yml`) runs lint, typecheck, tests, a compiled-binary smoke test and the bundle build on Ubuntu for every push to `main` and every pull request. Trigger it manually to include macOS. The Bun version comes from `.bun-version`.
 - **Pre-commit hook:** a Husky hook runs Biome on staged files and applies formatting and safe fixes. Lint errors it can't fix block the commit.

@@ -55,3 +55,7 @@ jobs:
         run: bun test test/smoke.test.ts -t "compiled binary"
         env:
           WHOOP_MCP_BINARY: dist/whoop-mcp
+
+      # Validates the manifests and checks the executables keep their execute bit in the zip.
+      - name: Build the Claude Desktop extensions
+        run: bun run build:mcpb

@@ -15,7 +15,9 @@ export function openUrl(url: string): void {
   try {
     Bun.spawn([opener, url], { stdout: "ignore", stderr: "ignore" });
   } catch {
-    log(`could not open a browser; open ${url} manually`);
+    // Origin and path only: the setup page's query carries a one-time token.
+    const { origin, pathname } = new URL(url);
+    log.warn("could not open a browser", { url: `${origin}${pathname}` });
   }
 }
 

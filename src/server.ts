@@ -4,6 +4,7 @@ import { BackgroundLogin } from "./auth/background-login.ts";
 import { resolveClientCredentials } from "./auth/credentials.ts";
 import { readTokens, tokenPath } from "./auth/store.ts";
 import { SCOPES, VERSION } from "./config.ts";
+import { errorFields, log } from "./log.ts";
 import { DISCLAIMER, errorResult, jsonResult, READ_ONLY } from "./tools/common.ts";
 import { registerDataTools } from "./tools/data-tools.ts";
 import { WhoopClient } from "./whoop/client.ts";
@@ -19,6 +20,39 @@ WHOOP heart-rate zones are % of heart-rate reserve (resting HR + pct x (max HR -
 Present suggestions as options for the user to choose. This is not medical advice: suggest a professional for symptoms, injuries or anything clinical.
 If a tool says the user is not logged in, call whoop_login.`;
 
+/**
+ * Logs every tool call: name, arguments, duration and the final outcome. It wraps the SDK's own tools/call
+ * handler, so calls rejected for bad arguments or an output-schema mismatch are logged too. Never the result,
+ * which is WHOOP data; arguments are only dates, ranges, metric names and flags.
+ */
+function instrumentTools(server: McpServer): void {
+  const low = server.server;
+  const setRequestHandler = low.setRequestHandler.bind(low) as (method: string, handler: unknown) => void;
+  (low as { setRequestHandler: unknown }).setRequestHandler = (method: string, handler: unknown) => {
+    if (method !== "tools/call" || typeof handler !== "function") return setRequestHandler(method, handler);
+    return setRequestHandler(
+      method,
+      async (request: { params: { name: string; arguments?: unknown } }, ctx: unknown) => {
+        const started = performance.now();
+        const { name, arguments: args } = request.params;
+        const ms = () => Math.round(performance.now() - started);
+        try {
+          const result = (await handler(request, ctx)) as { isError?: boolean; content?: { text?: string }[] };
+          if (result?.isError) {
+            log.warn(`tool ${name} error`, { ms: ms(), args, error: result.content?.[0]?.text?.slice(0, 300) });
+          } else {
+            log.info(`tool ${name} ok`, { ms: ms(), args });
+          }
+          return result;
+        } catch (err) {
+          log.error(`tool ${name} failed`, { ms: ms(), args, ...errorFields(err) });
+          throw err;
+        }
+      },
+    );
+  };
+}
+
 /** Where the WHOOP app credentials come from, or "missing" (never throws). */
 async function credentialSource(): Promise<"env" | "keychain" | "file" | "missing"> {
   try {
@@ -29,17 +63,21 @@ async function credentialSource(): Promise<"env" | "keychain" | "file" | "missin
 }
 
 export function createServer(client = new WhoopClient(), loginFlow = new BackgroundLogin()): McpServer {
-  const server = new McpServer(
-    { name: "whoop-mcp", version: VERSION },
-    { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
-  );
+  // No `capabilities: { tools: {} }` here: that makes the SDK install its tools/call handler in the constructor,
+  // before instrumentTools can wrap it. The first registerTool declares the capability instead.
+  const server = new McpServer({ name: "whoop-mcp", version: VERSION }, { instructions: INSTRUCTIONS });
+  server.server.oninitialized = () => {
+    const c = server.server.getClientVersion();
+    log.info("client connected", { client: c?.name, client_version: c?.version });
+  };
+  instrumentTools(server);
 
   server.registerTool(
     "whoop_status",
     {
       title: "WHOOP connection status",
       description:
-        "Check whether the WHOOP account is connected: app credentials, login state (including a browser login started with whoop_login), granted scopes and token expiry. Makes no WHOOP API calls. Use this first if other whoop_ tools fail.",
+        "Check whether the WHOOP account is connected: app credentials, login state (including a browser login started with whoop_login), granted scopes, token expiry and where the server's log file is. Makes no WHOOP API calls. Use this first if other whoop_ tools fail.",
       outputSchema: z.object({
         logged_in: z.boolean(),
         session_expired: z.boolean(),
@@ -52,6 +90,7 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
           error: z.string().optional(),
         }),
         token_file: z.string(),
+        log_file: z.string().nullable(),
         scopes: z.array(z.string()),
         missing_scopes: z.array(z.string()),
         access_token_expires_in_s: z.number().nullable(),
@@ -81,6 +120,7 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
           ...(login.state === "failed" ? { error: login.error } : {}),
         },
         token_file: tokenPath(),
+        log_file: log.settings().file,
         scopes,
         missing_scopes: tokens ? SCOPES.filter((s) => !scopes.includes(s)) : [...SCOPES],
         access_token_expires_in_s: tokens ? Math.round((tokens.expires_at - Date.now()) / 1000) : null,
@@ -105,8 +145,8 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
               : login.state === "failed"
                 ? `The last login failed (${login.error}). Call whoop_login to try again, or with reconfigure: true to enter different WHOOP app credentials.`
                 : app_credentials === "missing"
-                  ? "No WHOOP app credentials yet: call whoop_login, which opens a setup page in the browser to enter them (or run `whoop-mcp setup` in a terminal, or set WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET)."
-                  : "Not logged in: call whoop_login to sign in with the browser (or run `whoop-mcp login` in a terminal).";
+                  ? "No WHOOP app credentials yet: call whoop_login, which opens a setup page in the browser to enter them."
+                  : "Not logged in: call whoop_login to sign in with the browser.";
       return jsonResult(data, summary);
     },
   );

@@ -2,12 +2,12 @@ import { resolveClientCredentials } from "../auth/credentials.ts";
 import { OAuthHttpError, refreshTokens, toStored } from "../auth/oauth.ts";
 import { readTokens, type StoredTokens, writeTokens } from "../auth/store.ts";
 import { type ClientCredentials, WHOOP } from "../config.ts";
-import { log } from "../log.ts";
+import { errorFields, log } from "../log.ts";
 
 export class NotLoggedInError extends Error {
   override name = "NotLoggedInError";
   constructor() {
-    super("Not logged in to WHOOP. Call the whoop_login tool (or run `whoop-mcp login` in a terminal) first.");
+    super("Not logged in to WHOOP. Call the whoop_login tool first.");
   }
 }
 
@@ -73,6 +73,8 @@ export function retryDelayMs(res: Response): number {
  * store (another process may already have rotated the token). A rejected refresh re-reads the store too.
  * Cross-process locking is M1.
  */
+const elapsed = (started: number) => Math.round(performance.now() - started);
+
 export class WhoopClient {
   lastMeta: ResponseMeta = { rateLimit: {} };
   /**
@@ -94,12 +96,14 @@ export class WhoopClient {
     let tokens = await this.validTokens();
     let res = await this.send(url, tokens.access_token);
     if (res.status === 401) {
+      log.info("access token rejected, re-reading the token file", { path });
       const latest = await readTokens();
       if (!latest) throw new NotLoggedInError(); // logged out elsewhere: don't resurrect the session
       tokens = latest.access_token !== tokens.access_token ? latest : await this.refresh(latest);
       res = await this.send(url, tokens.access_token);
     }
     for (let attempt = 0; res.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES; attempt++) {
+      log.warn("whoop rate limit, waiting", { path, wait_ms: retryDelayMs(res), attempt: attempt + 1 });
       await Bun.sleep(retryDelayMs(res));
       res = await this.send(url, tokens.access_token);
     }
@@ -109,14 +113,34 @@ export class WhoopClient {
   }
 
   private async send(url: URL, accessToken: string): Promise<Response> {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+    const started = performance.now();
+    let res: Response;
+    try {
+      res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+    } catch (err) {
+      log.warn("whoop request failed", { path: url.pathname, ms: elapsed(started), ...errorFields(err) });
+      throw err;
+    }
     const rateLimit: Record<string, string> = {};
     res.headers.forEach((value, key) => {
       if (key.toLowerCase().startsWith("x-ratelimit")) rateLimit[key.toLowerCase()] = value;
     });
     this.lastMeta = { traceId: res.headers.get("x-whoop-trace-id") ?? undefined, rateLimit };
-    if (this.lastMeta.traceId) log(`GET ${url.pathname} -> ${res.status} trace=${this.lastMeta.traceId}`);
+    // Path, status and timing only: the body is WHOOP data and the query holds only dates and paging.
+    log.write(res.ok ? "info" : "warn", "whoop request", {
+      path: url.pathname,
+      status: res.status,
+      ms: elapsed(started),
+      trace: this.lastMeta.traceId,
+      ...(log.enabled("debug") ? { query: url.search || undefined } : {}),
+      ...(res.status === 429 ? { rate_limit: rateLimit } : {}),
+    });
     return res;
+  }
+
+  /** Settles once any token refresh in flight has finished, including writing the new tokens to disk. */
+  async drain(): Promise<void> {
+    await this.refreshing?.catch(() => {});
   }
 
   /** For whoop_status: what went wrong with these stored tokens, if this process found out. */
@@ -139,13 +163,18 @@ export class WhoopClient {
 
   /** Single-flight within this process. */
   private refresh(tokens: StoredTokens): Promise<StoredTokens> {
-    this.refreshing ??= this.doRefresh(tokens)
+    if (this.refreshing) return this.refreshing;
+    const started = performance.now();
+    log.info("refreshing the access token");
+    this.refreshing = this.doRefresh(tokens)
       .then(
         (next) => {
           this.authFailure = null;
+          log.info("token refresh done", { ms: elapsed(started) });
           return next;
         },
         (err: unknown) => {
+          log.error("token refresh failed", { ms: elapsed(started), ...errorFields(err) });
           this.authFailure = {
             refreshToken: tokens.refresh_token,
             message: err instanceof Error ? err.message : String(err),
@@ -169,10 +198,13 @@ export class WhoopClient {
       const code = oauthError(err);
       if (code === "invalid_client" || code === "unauthorized_client") throw new CredentialsRejectedError(code);
       if (code !== "invalid_grant") throw err;
-      // Another process (Claude Desktop and Claude Code share the file) may have rotated the token first.
+      // Another server process sharing the token file (a second Claude window) may have rotated it first.
       const latest = await readTokens();
       if (!latest) throw new NotLoggedInError();
-      if (latest.refresh_token !== tokens.refresh_token) return latest;
+      if (latest.refresh_token !== tokens.refresh_token) {
+        log.info("refresh token was already rotated by another process; using its tokens");
+        return latest;
+      }
       // Truly dead. The file is left alone: writing a marker could overwrite tokens another process is
       // saving right now. Each process instead remembers the dead token (see validTokens).
       throw new SessionExpiredError();
@@ -180,8 +212,14 @@ export class WhoopClient {
     const next = toStored(resp, tokens);
     // A logout or re-login while the request was in flight wins over this refresh.
     const latest = await readTokens();
-    if (!latest) throw new NotLoggedInError();
-    if (latest.refresh_token !== tokens.refresh_token) return latest;
+    if (!latest) {
+      log.warn("logged out during the token refresh; discarding the new tokens");
+      throw new NotLoggedInError();
+    }
+    if (latest.refresh_token !== tokens.refresh_token) {
+      log.info("logged in again during the token refresh; keeping the new login");
+      return latest;
+    }
     await writeTokens(next); // persist before use: the old refresh token is now dead
     return next;
   }

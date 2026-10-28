@@ -98,7 +98,7 @@ describe("WhoopClient.get", () => {
       .get("/v2/user/profile/basic")
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NotLoggedInError);
-    expect((err as Error).message).toContain("whoop-mcp login");
+    expect((err as Error).message).toContain("whoop_login");
     expect(apiCalls).toHaveLength(0);
     expect(tokenCalls).toHaveLength(0);
   });
@@ -294,6 +294,31 @@ describe("WhoopClient.get", () => {
     await c.get("/v2/user/profile/basic");
     expect(tokenCalls).toHaveLength(2);
     expect(apiCalls.at(-1)?.authorization).toBe("Bearer access-2");
+  });
+
+  test("drain() waits until an in-flight refresh has saved its tokens", async () => {
+    await writeTokens(tokens({ expires_at: Date.now() - 1000 }));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    onToken = async () => {
+      await gate;
+      return json({ access_token: "access-2", refresh_token: "refresh-2", expires_in: 3600, token_type: "bearer" });
+    };
+    const c = client();
+    const call = c.get("/v2/user/profile/basic");
+    await Bun.sleep(5);
+    let drained = false;
+    const draining = c.drain().then(() => {
+      drained = true;
+    });
+    await Bun.sleep(5);
+    expect(drained).toBe(false);
+    release();
+    await draining;
+    expect((await readTokens())?.refresh_token).toBe("refresh-2");
+    await call;
   });
 
   test("concurrent requests that both need a refresh share exactly one token request", async () => {

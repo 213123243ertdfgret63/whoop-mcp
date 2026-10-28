@@ -2,7 +2,7 @@
 
 ## Remote mode, so it works on claude.ai web and mobile
 
-Today the server runs locally over stdio. That covers Claude Code and Claude Desktop, but not claude.ai in a browser or the mobile apps, which can only reach **remote** MCP servers added as custom connectors.
+Today the server runs locally over stdio as a Claude Desktop extension. That covers Claude Desktop, but not claude.ai in a browser or the mobile apps, which can only reach **remote** MCP servers added as custom connectors.
 
 A remote mode would run the same tools over Streamable HTTP on a server the user deploys (Railway, Fly.io, a VPS). This is milestone **M6** in [RESEARCH.md](../RESEARCH.md#7-project-layout-and-milestones).
 

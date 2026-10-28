@@ -245,7 +245,8 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
         error: `${result.reason} Check both values and try again.`,
       });
     }
-    if (result.ok === "unknown") log(`could not verify WHOOP credentials (${result.reason}); continuing`);
+    if (result.ok === "unknown")
+      log.warn("could not verify the WHOOP app credentials; continuing", { reason: result.reason });
 
     let saved: CredentialSource;
     try {
@@ -274,7 +275,7 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
       handle(req).catch((err: unknown) => {
         const message = (err as Error).message;
         if (/maxRequestBodySize/.test(message)) return page("Too large", "Request too large.", 413);
-        log(`setup page error: ${message}`);
+        log.error("setup page error", { error: message });
         return page("Something went wrong", "Unexpected error; check the MCP server log.", 500);
       }),
     { maxRequestBodySize: MAX_BODY_BYTES },
