@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.0 (2026-10-28)
+
+- Show the extension as "WHOOP (unofficial)" in Claude Desktop (3ef4659)
+- Fix review findings in disconnect and the permission check (ee11e99)
+- Add whoop_disconnect and refuse logins missing permissions (4af7981)
+
 ## v0.4.0 (2026-10-28)
 
 - Fix review findings in the new connect flow (69a92b5)
