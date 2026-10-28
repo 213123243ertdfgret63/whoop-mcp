@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.1 (2026-10-28)
+
+- Fix dead logins, whoop_today gaps and oversized output (v0.2.1 fixes) (9fed2ae)
+
 ## v0.2.0 (2026-10-27)
 
 - Add WHOOP data tools for coaching (7e3a183)
