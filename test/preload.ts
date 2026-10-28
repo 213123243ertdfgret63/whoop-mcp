@@ -9,3 +9,5 @@ process.env.WHOOP_MCP_LOG_FILE ??= "off";
 process.env.WHOOP_MCP_LOG_LEVEL = "info";
 delete process.env.WHOOP_MCP_LOG_STDERR_LEVEL;
 for (const key of ["WHOOP_CLIENT_ID", "WHOOP_CLIENT_SECRET", "WHOOP_REDIRECT_URI"]) delete process.env[key];
+// Never open the real browser from a test.
+process.env.WHOOP_MCP_NO_BROWSER = "1";

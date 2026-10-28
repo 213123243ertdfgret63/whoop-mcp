@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { BackgroundLogin } from "../src/auth/background-login.ts";
-import { SCOPES, VERSION } from "../src/config.ts";
+import { ConfigError, SCOPES, VERSION } from "../src/config.ts";
 import { createServer } from "../src/server.ts";
 import { NotLoggedInError, WhoopApiError, type WhoopClient } from "../src/whoop/client.ts";
 import { addDays, cycleDate, todayLocal } from "../src/whoop/data.ts";
@@ -56,13 +56,31 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
+/**
+ * A login flow that announces a setup page but never opens a browser or binds a port, for tests that don't
+ * drive the login themselves (data tools start one when nothing is logged in).
+ */
+function pageOnlyFlow(url = "http://localhost:8787/setup?t=test") {
+  return new BackgroundLogin({
+    openBrowser: false,
+    resolveCreds: async () => {
+      throw new ConfigError("no credentials in tests");
+    },
+    setup: (opts) =>
+      new Promise((_resolve, reject) => {
+        queueMicrotask(() => opts.onSetupUrl?.(url));
+        opts.signal?.addEventListener("abort", () => reject(new Error("cancelled")));
+      }),
+  });
+}
+
 async function connect(
   responses: Responses = OK_RESPONSES,
   loginFlow?: BackgroundLogin,
   extra: Record<string, unknown> = {},
 ) {
   const stub = Object.assign(stubClient(responses), extra);
-  const server = createServer(stub as unknown as WhoopClient, loginFlow);
+  const server = createServer(stub as unknown as WhoopClient, loginFlow ?? pageOnlyFlow());
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   client = new Client({ name: "server-test", version: "0.0.0" });
@@ -263,12 +281,31 @@ describe("whoop_profile", () => {
     expect((result.structuredContent as { name: string }).name).toBe("Ada");
   });
 
-  test("turns NotLoggedInError into an error result telling the user to log in", async () => {
-    const { client } = await connect({ ...OK_RESPONSES, "/v2/user/profile/basic": new NotLoggedInError() });
+  test("when not logged in, starts the connection itself and tells Claude to wait with whoop_login", async () => {
+    const flow = pageOnlyFlow();
+    const { client } = await connect({ ...OK_RESPONSES, "/v2/user/profile/basic": new NotLoggedInError() }, flow);
     const result = await client.callTool({ name: "whoop_profile", arguments: {} });
     expect(result.isError).toBe(true);
+    expect(text(result)).toContain("open in the user's browser");
+    expect(text(result)).toContain("whoop_login with wait_seconds");
+    expect(flow.status).toMatchObject({ state: "pending", kind: "setup" });
+  });
+
+  test("doesn't reopen the page when a login failed a moment ago", async () => {
+    const flow = new BackgroundLogin({
+      openBrowser: false,
+      resolveCreds: async () => {
+        throw new ConfigError("none");
+      },
+      setup: async () => {
+        throw new Error("port busy");
+      },
+    });
+    await flow.start().catch(() => {});
+    expect(flow.status.state).toBe("failed");
+    const { client } = await connect({ ...OK_RESPONSES, "/v2/user/profile/basic": new NotLoggedInError() }, flow);
+    const result = await client.callTool({ name: "whoop_profile", arguments: {} });
     expect(text(result)).toBe(new NotLoggedInError().message);
-    expect(text(result)).toContain("whoop_login");
   });
 
   test("turns WhoopApiError into an error result with status, path and trace id", async () => {
@@ -322,13 +359,15 @@ describe("whoop_login", () => {
     return { flow, approve: () => approve() };
   }
 
-  test("returns the consent URL immediately and status shows the pending login", async () => {
+  test("opens the consent page and, with wait_seconds 0, returns at once with a script for Claude", async () => {
     const { flow } = fakeFlow();
     const { client } = await connect(OK_RESPONSES, flow);
-    const result = await client.callTool({ name: "whoop_login", arguments: {} });
+    const result = await client.callTool({ name: "whoop_login", arguments: { wait_seconds: 0 } });
     expect(result.isError).toBeFalsy();
     expect(text(result)).toContain(AUTH_URL);
-    expect(text(result)).toContain("whoop_status");
+    expect(text(result)).toContain("Tell the user in one sentence");
+    expect(text(result)).toContain("call whoop_login again");
+    expect(result.structuredContent).toMatchObject({ state: "pending", kind: "login" });
 
     const status = await client.callTool({ name: "whoop_status", arguments: {} });
     expect(status.structuredContent).toMatchObject({
@@ -338,30 +377,74 @@ describe("whoop_login", () => {
     expect(text(status)).toContain("Waiting for the user to approve");
   });
 
-  test("once the user approves, status reports logged in with the saved tokens", async () => {
+  test("a later call keeps waiting quietly instead of reopening the page", async () => {
+    const { flow } = fakeFlow();
+    const { client } = await connect(OK_RESPONSES, flow);
+    await client.callTool({ name: "whoop_login", arguments: { wait_seconds: 0 } });
+    const again = await client.callTool({ name: "whoop_login", arguments: { wait_seconds: 0 } });
+    expect(text(again)).toContain("Still waiting");
+    expect(text(again)).not.toContain("Tell the user in one sentence");
+  });
+
+  test("returns connected as soon as the user approves during the wait", async () => {
     const { flow, approve } = fakeFlow();
     const { client } = await connect(OK_RESPONSES, flow);
-    await client.callTool({ name: "whoop_login", arguments: {} });
+    const call = client.callTool({ name: "whoop_login", arguments: { wait_seconds: 10 } });
+    await Bun.sleep(30);
     approve();
-    await flow.settled();
+    const result = await call;
+    expect(result.structuredContent).toMatchObject({ state: "connected" });
+    expect(text(result)).toContain("Carry on with the user's original request");
     const status = await client.callTool({ name: "whoop_status", arguments: {} });
     expect(status.structuredContent).toMatchObject({ logged_in: true, login: { state: "succeeded" } });
   });
 
-  test("without app credentials opens the browser setup page and says what it is for", async () => {
-    const SETUP_URL = "http://localhost:8787/setup?t=tok";
+  test("when already connected it returns at once without starting a login", async () => {
+    await writeTokenFile({
+      access_token: "a",
+      refresh_token: "r",
+      token_type: "bearer",
+      scope: SCOPES.join(" "),
+      expires_at: Date.now() + 3600_000,
+      obtained_at: Date.now(),
+    });
+    const { flow } = fakeFlow();
+    const { client } = await connect(OK_RESPONSES, flow);
+    const result = await client.callTool({ name: "whoop_login", arguments: {} });
+    expect(result.structuredContent).toEqual({ state: "connected" });
+    expect(flow.status.state).toBe("idle");
+  });
+
+  test("a problem shown on the setup page ends the wait so Claude can mention it", async () => {
+    let report: ((p: "authorizing", problem: string) => void) | undefined;
     const flow = new BackgroundLogin({
       openBrowser: false,
+      resolveCreds: async () => {
+        throw new ConfigError("none");
+      },
       setup: (opts) =>
         new Promise(() => {
-          queueMicrotask(() => opts.onSetupUrl?.(SETUP_URL));
+          queueMicrotask(() => opts.onSetupUrl?.("http://localhost:8787/setup?t=x"));
+          report = (p, problem) => opts.onPhase?.(p, problem);
         }),
     });
     const { client } = await connect(OK_RESPONSES, flow);
-    const result = await client.callTool({ name: "whoop_login", arguments: {} });
+    await client.callTool({ name: "whoop_login", arguments: { wait_seconds: 0 } });
+    const call = client.callTool({ name: "whoop_login", arguments: { wait_seconds: 10 } });
+    await Bun.sleep(30);
+    report?.("authorizing", "WHOOP refused the redirect URL.");
+    const result = await call;
+    expect(result.structuredContent).toMatchObject({ state: "pending", problem: "WHOOP refused the redirect URL." });
+    expect(text(result)).toContain("showing a problem");
+  });
+
+  test("without app credentials opens the browser setup page", async () => {
+    const SETUP_URL = "http://localhost:8787/setup?t=tok";
+    const { client } = await connect(OK_RESPONSES, pageOnlyFlow(SETUP_URL));
+    const result = await client.callTool({ name: "whoop_login", arguments: { wait_seconds: 0 } });
     expect(result.isError).toBeFalsy();
     expect(text(result)).toContain(SETUP_URL);
-    expect(text(result)).toMatch(/Client ID/);
+    expect(text(result)).toContain("about 5 minutes");
     const status = await client.callTool({ name: "whoop_status", arguments: {} });
     expect(status.structuredContent).toMatchObject({ login: { state: "pending", authorize_url: SETUP_URL } });
   });

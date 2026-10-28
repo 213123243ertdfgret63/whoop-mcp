@@ -73,9 +73,9 @@ Your WHOOP login and app credentials are kept and work with the extension.
 
 ## Connect your WHOOP account
 
-Ask Claude to **"connect WHOOP"**. It calls the `whoop_login` tool, which opens a page in your browser:
+Just ask Claude something about your WHOOP data, such as "how did I sleep?" (or say "connect WHOOP"). If WHOOP isn't connected yet, whoop-mcp opens a page in your browser, and Claude waits and carries on with your question once you're done. You don't need to tell Claude you've finished.
 
-1. **First time:** a setup page walks you through creating a free app at the [WHOOP developer dashboard](https://developer-dashboard.whoop.com). It tells you what to put in each field of WHOOP's form:
+1. **First time (about 5 minutes):** the page walks you through creating a free app at the [WHOOP developer dashboard](https://developer-dashboard.whoop.com). **Open WHOOP side by side** puts the dashboard next to the page, and every value has a Copy button:
 
    | Field          | Value                                                                          |
    | -------------- | ------------------------------------------------------------------------------ |
@@ -84,14 +84,16 @@ Ask Claude to **"connect WHOOP"**. It calls the `whoop_login` tool, which opens 
    | Contacts       | your own email address                                                         |
    | Privacy policy | `https://github.com/213123243ertdfgret63/whoop-mcp#connect-your-whoop-account` |
    | Redirect URLs  | `http://localhost:8787/callback` (exactly)                                     |
-   | Scopes         | tick all six                                                                   |
+   | Scopes         | tick every box (six)                                                           |
    | Webhooks       | leave empty                                                                    |
 
-   It then asks for the app's Client ID and Client Secret. It checks them with WHOOP (if WHOOP can't be reached, it saves them anyway) and saves them to your system keychain.
+   WHOOP may first ask you to create a Team; name it anything. Then copy the app's **Client ID** and **Client Secret** and press ⌘V anywhere on the page: each goes into the right box. They're checked with WHOOP and saved to your system keychain automatically.
 
-2. **Then:** it continues to WHOOP's consent screen. Approve access, tell Claude you're done, and it confirms with `whoop_status`.
+2. **Then:** the page sends you on to WHOOP to approve access, and follows along until the connection is done.
 
-After that, `whoop_login` goes straight to WHOOP's consent screen. If WHOOP shows an error (for example about the redirect URI or an unknown client), ask Claude to "set up WHOOP again" to enter different credentials. That calls `whoop_login` with `reconfigure: true`.
+Why your own app: WHOOP's terms don't allow open-source tools to share one app, so each person makes their own; only you use it.
+
+Later, when the login expires, the page goes straight to WHOOP's approval screen. If WHOOP shows an error (for example about the redirect URL), the page explains it and offers **Try again** once you've fixed the app, or **Use different credentials**. To switch to another app, ask Claude to "set up WHOOP again" (`whoop_login` with `reconfigure: true`).
 
 - The setup page runs only on your computer (`localhost`), behind a one-time link, and refuses requests from other websites.
 - Tokens are stored in `~/.config/whoop-mcp/tokens.json` (owner-only). The app credentials are stored in your system keychain (service `whoop-mcp`), or in a private file next to the tokens when there's no keychain.
@@ -174,6 +176,7 @@ Install `dist/whoop-mcp-macos.mcpb` as above. To run the code straight from the 
 
 - **Credentials:** `WHOOP_CLIENT_ID` and `WHOOP_CLIENT_SECRET` env vars (see `.env.example`) take precedence over saved credentials, but only when both are set.
 - **Terminal commands:** `bun src/index.ts setup | login | status | logout` do the same as the tools, from a terminal.
+- **No browser:** `WHOOP_MCP_NO_BROWSER=1` makes the server announce the setup and login pages without opening them (the tests use it).
 - **Updating:** `git pull && bun install`. `main` can be ahead of the last release. To run exactly a released version, check out its tag, for example `git checkout v0.2.1`.
 
 ### Cutting a release

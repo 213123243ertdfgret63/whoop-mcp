@@ -17,12 +17,26 @@ afterAll(async () => {
 
 type ClientOptions = ConstructorParameters<typeof Client>[1];
 
+function freePort(): number {
+  const s = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  const port = s.port as number;
+  s.stop(true);
+  return port;
+}
+
 async function connect(command: string[], options?: ClientOptions) {
   const transport = new StdioClientTransport({
     command: command[0]!,
     args: command.slice(1),
     // The file store keeps the test away from the real keychain, where a prompt would hang it.
-    env: { PATH: process.env.PATH ?? "", WHOOP_MCP_HOME: home, WHOOP_MCP_CREDENTIAL_STORE: "file" },
+    // No browser, and a free port, since a data tool now starts a login (and its page) by itself.
+    env: {
+      PATH: process.env.PATH ?? "",
+      WHOOP_MCP_HOME: home,
+      WHOOP_MCP_CREDENTIAL_STORE: "file",
+      WHOOP_MCP_NO_BROWSER: "1",
+      WHOOP_REDIRECT_URI: `http://127.0.0.1:${freePort()}/callback`,
+    },
     stderr: "pipe",
   });
   const client = new Client({ name: "smoke-test", version: "0.0.0" }, options);
@@ -120,7 +134,12 @@ test("in serve mode it logs to its file, keeps routine lines off stderr, and exi
   try {
     const proc = Bun.spawn(["bun", "run", ENTRY], {
       // No WHOOP_MCP_LOG_FILE: the server picks its default, which WHOOP_MCP_HOME puts under <home>/logs.
-      env: { PATH: process.env.PATH ?? "", WHOOP_MCP_HOME: logHome, WHOOP_MCP_CREDENTIAL_STORE: "file" },
+      env: {
+        PATH: process.env.PATH ?? "",
+        WHOOP_MCP_HOME: logHome,
+        WHOOP_MCP_CREDENTIAL_STORE: "file",
+        WHOOP_MCP_NO_BROWSER: "1",
+      },
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",

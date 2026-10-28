@@ -37,7 +37,7 @@ import {
   todayLocal,
   type Workout,
 } from "../whoop/data.ts";
-import { DISCLAIMER, errorResult, jsonResult, READ_ONLY } from "./common.ts";
+import { type AutoLogin, DISCLAIMER, jsonResult, READ_ONLY, toolError } from "./common.ts";
 
 const MAX_DAYS = 90;
 /** Extra days fetched so a WHOOP day still running from a few dates back keeps its full history window. */
@@ -128,7 +128,7 @@ export function recoveryText(r: Recovery | undefined, pct: number | null, zone: 
   return r.score?.user_calibrating ? `${base}, provisional because WHOOP is still calibrating` : base;
 }
 
-export function registerDataTools(server: McpServer, client: Getter): void {
+export function registerDataTools(server: McpServer, client: Getter, loginFlow?: AutoLogin): void {
   const tool = <S extends z.ZodRawShape>(
     name: string,
     title: string,
@@ -145,7 +145,7 @@ export function registerDataTools(server: McpServer, client: Getter): void {
           const { data, summary } = await run(args);
           return jsonResult({ ...data, disclaimer: DISCLAIMER }, summary);
         } catch (err) {
-          return errorResult(err);
+          return toolError(err, loginFlow);
         }
       }) as never,
     );

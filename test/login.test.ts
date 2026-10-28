@@ -79,7 +79,8 @@ describe("login()", () => {
     const res = await callback({ code: "auth-code", state, scope: "read:profile offline" });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
-    expect(await res.text()).toContain("WHOOP connected");
+    // The exchange runs after this page is sent, so it doesn't claim the connection is done.
+    expect(await res.text()).toContain("Approved");
 
     const result = await promise;
     expect(result.tokens).toEqual(TOKENS);
@@ -126,7 +127,7 @@ describe("login()", () => {
     const res = await callback({ error: "access_denied", error_description: "The user denied access", state });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
-    expect(await res.text()).toContain("Authorization failed");
+    expect(await res.text()).toContain("didn&#x27;t connect");
     await expect(promise).rejects.toThrow("Authorization failed: access_denied — The user denied access");
     expect(tokenRequests).toHaveLength(0);
   });

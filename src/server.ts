@@ -1,11 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import { BackgroundLogin } from "./auth/background-login.ts";
+import { BackgroundLogin, type LoginStatus } from "./auth/background-login.ts";
 import { resolveClientCredentials } from "./auth/credentials.ts";
 import { readTokens, tokenPath } from "./auth/store.ts";
 import { SCOPES, VERSION } from "./config.ts";
 import { errorFields, log } from "./log.ts";
-import { DISCLAIMER, errorResult, jsonResult, READ_ONLY } from "./tools/common.ts";
+import { DISCLAIMER, errorResult, jsonResult, LOGIN_WAIT_SECONDS, READ_ONLY, toolError } from "./tools/common.ts";
 import { registerDataTools } from "./tools/data-tools.ts";
 import { WhoopClient } from "./whoop/client.ts";
 
@@ -18,7 +18,7 @@ Useful for planning and reviewing the user's training:
 Judge numbers against the user's own baselines (whoop_baselines, or vs_last_30_days in whoop_today) rather than population norms, and say when data is missing, pending or calibrating. A baseline needs 7+ days (baseline_days); with fewer, say it is still forming. Dates before data_quality.first_data_date have no WHOOP data at all (usually the account is newer than the range), so don't read them as missed wear or rest days. Dates are the user's local dates; a WHOOP day runs from sleep to sleep, not midnight to midnight.
 WHOOP heart-rate zones are % of heart-rate reserve (resting HR + pct x (max HR - resting HR)), not % of max HR.
 Present suggestions as options for the user to choose. This is not medical advice: suggest a professional for symptoms, injuries or anything clinical.
-If a tool says the user is not logged in, call whoop_login.`;
+If a tool says WHOOP isn't connected, it has already opened the connection page: tell the user in one sentence, call whoop_login with wait_seconds until it reports connected, then carry on with their request. Never ask the user to say when they're done.`;
 
 /**
  * Logs every tool call: name, arguments, duration and the final outcome. It wraps the SDK's own tools/call
@@ -53,6 +53,84 @@ function instrumentTools(server: McpServer): void {
   };
 }
 
+/** Whether saved tokens look usable: all scopes, refreshable, and not known to be dead in this process. */
+async function isConnected(client: WhoopClient): Promise<boolean> {
+  const tokens = await readTokens();
+  if (!tokens) return false;
+  if (client.authProblem?.(tokens).session_expired) return false;
+  const scopes = tokens.scope?.split(/\s+/) ?? [];
+  if (SCOPES.some((s) => !scopes.includes(s))) return false;
+  return Boolean(tokens.refresh_token) || tokens.expires_at > Date.now();
+}
+
+function textResult(text: string, data: Record<string, unknown>) {
+  return { content: [{ type: "text" as const, text }], structuredContent: data };
+}
+
+const connectedResult = () =>
+  textResult("WHOOP is connected. Carry on with the user's request now (call the WHOOP tool you need).", {
+    state: "connected",
+  });
+
+/** What whoop_login tells Claude: a script for the next step, not prose to show the user. */
+function loginResult(status: LoginStatus, ctx: { first: boolean; kind: "setup" | "login"; url: string }) {
+  const again = `call whoop_login again right away with wait_seconds=${LOGIN_WAIT_SECONDS} (no reconfigure)`;
+  switch (status.state) {
+    case "succeeded":
+      return textResult(
+        "WHOOP is connected. Carry on with the user's original request now (call the WHOOP tool again); don't ask them anything first.",
+        { state: "connected", scope: status.scope },
+      );
+    case "failed": {
+      const credentials = /client|credential|redirect/i.test(status.error);
+      return textResult(
+        `The WHOOP connection failed: ${status.error.slice(0, 300)} Tell the user in one sentence. ${credentials ? "If the app's details look wrong, call whoop_login with reconfigure: true to enter them again." : "Then call whoop_login to try again if they want."}`,
+        { state: "failed", error: status.error },
+      );
+    }
+    case "idle":
+      return textResult("The WHOOP connection was cancelled.", { state: "idle" });
+    case "pending": {
+      const minutes = Math.floor((Date.now() - status.startedAt) / 60_000);
+      const data = {
+        state: "pending",
+        kind: status.kind,
+        url: ctx.url,
+        ...(status.progress ? { progress: status.progress } : {}),
+        ...(status.problem ? { problem: status.problem } : {}),
+      };
+      if (status.problem) {
+        return textResult(
+          `The WHOOP page in the user's browser is showing a problem: "${status.problem.slice(0, 300)}" The page offers Try again. Tell the user that in one or two sentences, then ${again}.`,
+          data,
+        );
+      }
+      if (ctx.first) {
+        const say =
+          ctx.kind === "setup"
+            ? "I've opened a page in your browser to connect WHOOP; it takes about 5 minutes the first time, and I'll carry on when you're done."
+            : "I've opened WHOOP in your browser; approve access there and I'll carry on.";
+        return textResult(
+          `Opened ${ctx.kind === "setup" ? "a WHOOP setup page" : "WHOOP's approval page"} in the user's browser (if it didn't open, they can visit ${ctx.url}). Tell the user in one sentence, e.g. "${say}" Don't repeat the page's steps. Then ${again}, and keep calling it while it says pending.`,
+          data,
+        );
+      }
+      const step =
+        status.progress === "form" || status.progress === undefined
+          ? ctx.kind === "setup"
+            ? "creating the WHOOP app"
+            : "approving access"
+          : status.progress === "verifying"
+            ? "checking the app's codes"
+            : "approving access in WHOOP";
+      return textResult(
+        `Still waiting for the user (${minutes} min, ${step}). ${again[0]!.toUpperCase()}${again.slice(1)}. Say nothing to the user unless this passes 10 minutes; then ask once whether they need help.`,
+        data,
+      );
+    }
+  }
+}
+
 /** Where the WHOOP app credentials come from, or "missing" (never throws). */
 async function credentialSource(): Promise<"env" | "keychain" | "file" | "missing"> {
   try {
@@ -68,7 +146,12 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
   const server = new McpServer({ name: "whoop-mcp", version: VERSION }, { instructions: INSTRUCTIONS });
   server.server.oninitialized = () => {
     const c = server.server.getClientVersion();
-    log.info("client connected", { client: c?.name, client_version: c?.version });
+    // Capabilities decide whether richer UI (MCP Apps cards, URL elicitation) would work in this client.
+    log.info("client connected", {
+      client: c?.name,
+      client_version: c?.version,
+      capabilities: server.server.getClientCapabilities(),
+    });
   };
   instrumentTools(server);
 
@@ -130,8 +213,8 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
       const summary =
         login.state === "pending"
           ? login.kind === "setup"
-            ? `Waiting for the user to finish the setup page in the browser (enter the WHOOP app's Client ID and Secret, then approve access): ${login.authorizeUrl}`
-            : `Waiting for the user to approve access in the browser: ${login.authorizeUrl}`
+            ? `Waiting for the user to finish the setup page in the browser (${login.authorizeUrl}). Call whoop_login with wait_seconds to wait for it.`
+            : `Waiting for the user to approve access in the browser (${login.authorizeUrl}). Call whoop_login with wait_seconds to wait for it.`
           : session_expired
             ? "The WHOOP session has expired or was revoked. Call whoop_login to reconnect."
             : data.logged_in
@@ -154,10 +237,17 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
   server.registerTool(
     "whoop_login",
     {
-      title: "Log in to WHOOP",
+      title: "Connect WHOOP",
       description:
-        "Connect the user's WHOOP account in the browser. Opens a page and returns its URL immediately (always show the URL to the user in case the browser didn't open). If no WHOOP app credentials are configured yet, the page is a local setup form that collects the app's Client ID and Secret (with instructions for creating the app) and then continues to WHOOP; otherwise it goes straight to WHOOP's consent page. The rest happens in the browser, so after the user says they're done, call whoop_status to confirm. Use reconfigure: true when the saved app credentials are wrong (WHOOP showed an error such as an invalid client or redirect URI, or the user wants another app): it cancels any pending login and opens the setup page.",
+        "Connect the user's WHOOP account: opens a setup or approval page in their browser and waits for them to finish. Returns at once if WHOOP is already connected. While the result says pending, call it again with wait_seconds (it never reopens the page); never ask the user to tell you when they're done. The first time, the page walks the user through creating a free WHOOP developer app and pasting its Client ID and Secret. Use reconfigure: true only when the saved app is wrong (WHOOP rejected the client or the redirect URL) or the user wants a different app.",
       inputSchema: z.object({
+        wait_seconds: z
+          .number()
+          .int()
+          .min(0)
+          .max(45)
+          .default(LOGIN_WAIT_SECONDS)
+          .describe("Wait up to this many seconds for the user to finish in the browser before returning."),
         reconfigure: z
           .boolean()
           .default(false)
@@ -165,23 +255,15 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
       }),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ reconfigure }) => {
+    async ({ wait_seconds, reconfigure }, ctx) => {
       try {
-        const { authorizeUrl, alreadyPending, kind } = await loginFlow.start({ reconfigure });
-        const lead =
-          kind === "setup"
-            ? `${alreadyPending ? "The WHOOP setup page is already open" : "Opened a WHOOP setup page in the browser"}. It explains how to create a free WHOOP developer app, asks for its Client ID and Client Secret, and then continues to WHOOP to approve access.`
-            : alreadyPending
-              ? "A WHOOP login is already waiting for approval."
-              : "Opened the WHOOP consent page in the browser.";
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `${lead} If the browser didn't open, visit:\n\n${authorizeUrl}\n\nWhen the user has finished in the browser, call whoop_status to confirm.`,
-            },
-          ],
-        };
+        if (!reconfigure && loginFlow.status.state !== "pending" && (await isConnected(client))) {
+          return connectedResult();
+        }
+        const wasPending = loginFlow.status.state === "pending";
+        const { authorizeUrl, kind } = await loginFlow.start({ reconfigure });
+        const status = await loginFlow.waitForChange(wait_seconds * 1000, ctx?.mcpReq?.signal);
+        return loginResult(status, { first: !wasPending, kind, url: authorizeUrl });
       } catch (err) {
         return errorResult(err);
       }
@@ -218,11 +300,11 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
         };
         return jsonResult(data, `Profile for ${data.name}.`);
       } catch (err) {
-        return errorResult(err);
+        return toolError(err, loginFlow);
       }
     },
   );
 
-  registerDataTools(server, client);
+  registerDataTools(server, client, loginFlow);
   return server;
 }

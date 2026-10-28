@@ -2,6 +2,7 @@ import { openUrl } from "../cli/terminal.ts";
 import type { ClientCredentials } from "../config.ts";
 import { log } from "../log.ts";
 import { buildAuthorizeUrl, exchangeCode, randomState, type TokenResponse } from "./oauth.ts";
+import { cspFor, htmlPage, newNonce } from "./page-style.ts";
 
 export interface LoginOptions {
   openBrowser?: boolean;
@@ -27,12 +28,58 @@ export const PAGE_HEADERS = {
   "X-Content-Type-Options": "nosniff",
 } as const;
 
-// `body` can carry attacker-controlled query params (error_description), so everything is escaped.
-export const page = (title: string, body: string, status = 200) =>
-  new Response(
-    `<!doctype html><meta charset="utf-8"><title>${Bun.escapeHTML(title)}</title>` +
-      `<body style="font:16px system-ui;max-width:32rem;margin:4rem auto"><h1>${Bun.escapeHTML(title)}</h1><p>${Bun.escapeHTML(body)}</p></body>`,
-    { status, headers: PAGE_HEADERS },
+/** A simple styled message page. `body` can carry attacker-controlled query params (error_description), so
+ * everything is escaped. */
+export function page(title: string, body: string, status = 200, tone: "ok" | "err" | "info" = "info"): Response {
+  const esc = Bun.escapeHTML;
+  const nonce = newNonce();
+  const cls = tone === "info" ? "" : ` class="${tone}"`;
+  const mark = tone === "ok" ? "✓ " : "";
+  return new Response(
+    htmlPage({ title: esc(title), nonce, body: `<h1${cls}>${mark}${esc(title)}</h1><p>${esc(body)}</p>` }),
+    { status, headers: { ...PAGE_HEADERS, "Content-Security-Policy": cspFor(nonce) } },
+  );
+}
+
+/** One plain-language line for an OAuth error WHOOP sent back, with what to do about it. */
+export function explainOAuthError(error: string, description = ""): string {
+  const text = `${error} ${description}`.toLowerCase();
+  if (text.includes("redirect")) {
+    return "WHOOP refused the redirect URL. In your WHOOP app, Redirect URLs must contain exactly http://localhost:8787/callback (no trailing slash).";
+  }
+  if (error === "invalid_client" || text.includes("client")) {
+    return "WHOOP didn't recognise the app. Check the Client ID and Secret, or create the app again.";
+  }
+  if (error === "access_denied") return "Access wasn't approved on WHOOP's page.";
+  if (error === "invalid_scope" || text.includes("scope")) {
+    return "WHOOP refused the permissions. In your WHOOP app, tick every box under Scopes.";
+  }
+  return `WHOOP returned an error: ${error}${description ? ` (${description.slice(0, 200)})` : ""}.`;
+}
+
+export type CallbackOutcome =
+  | { kind: "wrong-state" }
+  | { kind: "error"; error: string; description?: string }
+  | { kind: "no-code" }
+  | { kind: "code"; code: string };
+
+/** What WHOOP's redirect to the callback says, checking `state` first. */
+export function parseCallback(url: URL, state: string): CallbackOutcome {
+  const params = Object.fromEntries(url.searchParams);
+  // State first: a request without this login's state didn't come from WHOOP for this login (any web page can
+  // navigate here), so it must neither end the login nor get its text into our status.
+  if (params.state !== state) return { kind: "wrong-state" };
+  if (params.error) return { kind: "error", error: params.error, description: params.error_description };
+  if (!params.code) return { kind: "no-code" };
+  return { kind: "code", code: params.code };
+}
+
+export const wrongStatePage = () =>
+  page(
+    "Not this login",
+    "This link doesn't belong to the WHOOP login in progress. Use the page Claude opened, or start the login again.",
+    400,
+    "err",
   );
 
 /** Validates a localhost redirect URI and returns where to listen. */
@@ -96,42 +143,38 @@ export function listenLocal(
 }
 
 /**
- * The OAuth redirect handler for one login attempt. `result` settles on the first callback that carries a
- * code or an error; a wrong `state` aborts (possible CSRF).
+ * The OAuth redirect handler for one consent-only login. `result` settles on the first callback that carries
+ * a code or an error; a wrong `state` is refused without ending the login (possible CSRF).
  */
-export function oauthCallback(state: string, successMessage: string) {
-  const deferred = Promise.withResolvers<{ code: string; params: Record<string, string> }>();
+export function oauthCallback(state: string) {
+  const deferred = Promise.withResolvers<{ code: string }>();
   // Settle on the next tick so the callback page is written before the caller can exit the process.
-  const resolve = (value: { code: string; params: Record<string, string> }) =>
-    setTimeout(() => deferred.resolve(value), 50);
+  const resolve = (value: { code: string }) => setTimeout(() => deferred.resolve(value), 50);
   const reject = (err: Error) => setTimeout(() => deferred.reject(err), 50);
 
   const handle = (url: URL): Response => {
-    const params = Object.fromEntries(url.searchParams);
-    // State first: a request without this login's state didn't come from WHOOP for this login (any web page can
-    // navigate here), so it must neither end the login nor get its text into our status.
-    if (params.state !== state) {
-      return page(
-        "Not this login",
-        "This link doesn't belong to the WHOOP login in progress. Use the page Claude opened, or start the login again.",
-        400,
-      );
+    const outcome = parseCallback(url, state);
+    switch (outcome.kind) {
+      case "wrong-state":
+        return wrongStatePage();
+      case "error": {
+        const detail = `${outcome.error}${outcome.description ? ` — ${outcome.description}` : ""}`;
+        reject(new Error(`Authorization failed: ${detail}`));
+        return page("WHOOP didn't connect", explainOAuthError(outcome.error, outcome.description), 200, "err");
+      }
+      case "no-code":
+        reject(new Error("Callback had no authorization code."));
+        return page("WHOOP didn't connect", "No authorization code was returned.", 200, "err");
+      case "code":
+        resolve({ code: outcome.code });
+        // The token exchange happens after this page is sent, so don't claim success yet.
+        return page(
+          "Approved",
+          "Claude is finishing the connection; you can close this tab and go back to Claude.",
+          200,
+          "ok",
+        );
     }
-    if (params.error) {
-      reject(
-        new Error(
-          `Authorization failed: ${params.error}${params.error_description ? ` — ${params.error_description}` : ""}`,
-        ),
-      );
-      return page("Authorization failed", `${params.error}: ${params.error_description ?? ""}`);
-    }
-    if (!params.code) {
-      reject(new Error("Callback had no authorization code."));
-      return page("Login failed", "No authorization code was returned.");
-    }
-    const { code, ...rest } = params;
-    resolve({ code, params: rest });
-    return page("WHOOP connected", successMessage);
   };
 
   return { handle, result: deferred.promise, reject: (err: Error) => deferred.reject(err) };
@@ -143,7 +186,7 @@ export async function login(creds: ClientCredentials, opts: LoginOptions = {}): 
   const state = randomState();
   const authorizeUrl = buildAuthorizeUrl({ creds, state });
 
-  const callback = oauthCallback(state, "You can close this tab and return to Claude or your terminal.");
+  const callback = oauthCallback(state);
   const server = listenLocal(redirect, (req) => {
     const url = new URL(req.url);
     return url.pathname === redirect.pathname ? callback.handle(url) : new Response("Not found", { status: 404 });
