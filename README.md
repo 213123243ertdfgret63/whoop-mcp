@@ -95,6 +95,8 @@ Why your own app: WHOOP's terms don't allow open-source tools to share one app, 
 
 Later, when the login expires, the page goes straight to WHOOP's approval screen. If WHOOP shows an error (for example about the redirect URL), the page explains it and offers **Try again** once you've fixed the app, or **Use different credentials**. To switch to another app, ask Claude to "set up WHOOP again" (`whoop_login` with `reconfigure: true`).
 
+- whoop-mcp needs every permission. If you untick one on WHOOP's page (or your app doesn't have one ticked under Scopes), it doesn't connect: it revokes that partial login and the page tells you what to fix.
+- To disconnect, ask Claude to "disconnect WHOOP". It revokes whoop-mcp's access at WHOOP and deletes the saved login; say "and forget the app" to delete the saved Client ID and Secret too.
 - The setup page runs only on your computer (`localhost`), behind a one-time link, and refuses requests from other websites.
 - Tokens are stored in `~/.config/whoop-mcp/tokens.json` (owner-only). The app credentials are stored in your system keychain (service `whoop-mcp`), or in a private file next to the tokens when there's no keychain.
 
@@ -117,7 +119,7 @@ It rotates at 5 MB and keeps three old files. `whoop_status` reports the path. W
 
 ## Uninstall
 
-1. In Claude Desktop, open **Settings → Extensions**, choose **whoop-mcp** and click **Uninstall**.
+1. Ask Claude to "disconnect WHOOP and forget the app" first: that revokes access at WHOOP and deletes the saved login and app credentials. Then, in Claude Desktop, open **Settings → Extensions**, choose **whoop-mcp** and click **Uninstall**.
 2. To also delete your saved WHOOP login, app credentials and logs:
 
    On macOS:
@@ -149,6 +151,7 @@ Ask Claude things like "how am I today, should I train hard?", "how was my week?
 | `whoop_get_record`      | One cycle, sleep, workout or recovery by ID, with the raw WHOOP record.                                                                                                                 |
 | `whoop_profile`         | Your name, height, weight and max heart rate.                                                                                                                                           |
 | `whoop_status`          | Connection state: app credentials, login progress, granted scopes, token expiry and server version. Makes no WHOOP API calls.                                                           |
+| `whoop_disconnect`      | Disconnects your WHOOP account: revokes access at WHOOP and deletes the saved login. `forget_app: true` also deletes the saved app credentials.                                         |
 | `whoop_login`           | Connects your account in the browser (setup page first if needed). `reconfigure: true` re-enters the app credentials.                                                                   |
 
 Dates are your local dates, and a WHOOP day runs from sleep to sleep, not midnight to midnight. Results include a `data_quality` section that says which days are missing, still being scored or calibrating. Ranges are limited to 90 days, and `raw: true` (the original WHOOP records) to 7. Nothing here is medical advice.

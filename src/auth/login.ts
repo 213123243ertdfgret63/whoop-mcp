@@ -1,11 +1,20 @@
 import { openUrl } from "../cli/terminal.ts";
-import type { ClientCredentials } from "../config.ts";
+import { type ClientCredentials, missingScopes } from "../config.ts";
 import { log } from "../log.ts";
-import { buildAuthorizeUrl, exchangeCode, randomState, type TokenResponse } from "./oauth.ts";
+import {
+  buildAuthorizeUrl,
+  exchangeCode,
+  MissingScopesError,
+  randomState,
+  revokeAccess,
+  type TokenResponse,
+} from "./oauth.ts";
 import { cspFor, htmlPage, newNonce } from "./page-style.ts";
 
 export interface LoginOptions {
   openBrowser?: boolean;
+  /** Injectable for tests: revokes a token WHOOP issued with too few permissions. */
+  revoke?: (accessToken: string) => Promise<unknown>;
   timeoutMs?: number;
   /** Called once the callback server is listening, with the URL the user must open. */
   onAuthorizeUrl?: (url: string) => void;
@@ -185,6 +194,7 @@ export async function login(creds: ClientCredentials, opts: LoginOptions = {}): 
   const redirect = parseRedirect(creds.redirectUri);
   const state = randomState();
   const authorizeUrl = buildAuthorizeUrl({ creds, state });
+  const revoke = opts.revoke ?? revokeAccess;
 
   const callback = oauthCallback(state);
   const server = listenLocal(redirect, (req) => {
@@ -206,7 +216,15 @@ export async function login(creds: ClientCredentials, opts: LoginOptions = {}): 
 
   try {
     const { code } = await callback.result;
-    return { tokens: await exchangeCode(creds, code) };
+    const tokens = await exchangeCode(creds, code);
+    // All permissions or no connection: a partial grant would leave tools failing one by one later.
+    const missing = missingScopes(tokens.scope);
+    if (missing.length) {
+      log.warn("WHOOP granted only some permissions; not connecting", { missing });
+      await revoke(tokens.access_token);
+      throw new MissingScopesError(missing);
+    }
+    return { tokens };
   } finally {
     clearTimeout(timeout);
     opts.signal?.removeEventListener("abort", onAbort);

@@ -96,7 +96,7 @@ async function writeTokenFile(tokens: Record<string, unknown>) {
 }
 
 describe("tools/list", () => {
-  test("exposes every tool but whoop_login as read-only and whoop_login as a non-destructive write", async () => {
+  test("everything is read-only except whoop_login (a write) and whoop_disconnect (destructive)", async () => {
     const { client } = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
@@ -104,6 +104,7 @@ describe("tools/list", () => {
       "whoop_compare_periods",
       "whoop_correlate",
       "whoop_daily_summaries",
+      "whoop_disconnect",
       "whoop_get_record",
       "whoop_login",
       "whoop_profile",
@@ -114,7 +115,8 @@ describe("tools/list", () => {
       "whoop_trends",
       "whoop_workouts",
     ]);
-    for (const t of tools.filter((t) => t.name !== "whoop_login")) expect(t.annotations?.readOnlyHint).toBe(true);
+    const writes = new Set(["whoop_login", "whoop_disconnect"]);
+    for (const t of tools.filter((t) => !writes.has(t.name))) expect(t.annotations?.readOnlyHint).toBe(true);
     for (const t of tools) expect(t.annotations?.idempotentHint).toBe(true);
     const byName = (n: string) => tools.find((t) => t.name === n)?.annotations;
     expect(byName("whoop_status")?.readOnlyHint).toBe(true);
@@ -122,6 +124,7 @@ describe("tools/list", () => {
     // whoop_login writes tokens, so clients should not treat it as read-only; it never deletes anything.
     expect(byName("whoop_login")?.readOnlyHint).toBe(false);
     expect(byName("whoop_login")?.destructiveHint).toBe(false);
+    expect(byName("whoop_disconnect")?.destructiveHint).toBe(true);
   });
 
   test("whoop_status is marked as not touching the outside world, whoop_profile is", async () => {
@@ -774,5 +777,74 @@ describe("dates and windows", () => {
     expect(result.structuredContent).toMatchObject({ days_with_strain: { acute: 7, chronic: 28 } });
     const daily = (result.structuredContent as { daily: { date: string }[] }).daily;
     expect(daily.at(-1)?.date).toBe(addDays(today, -1));
+  });
+});
+
+describe("whoop_disconnect", () => {
+  const stored = {
+    access_token: "a",
+    refresh_token: "r",
+    token_type: "bearer",
+    scope: SCOPES.join(" "),
+    expires_at: Date.now() + 3600_000,
+    obtained_at: Date.now(),
+  };
+
+  test("revokes access at WHOOP and deletes the saved login", async () => {
+    await writeTokenFile(stored);
+    let revoked = 0;
+    const { client } = await connect(OK_RESPONSES, undefined, {
+      revokeAccess: async () => {
+        revoked++;
+        return "revoked";
+      },
+    });
+    const result = await client.callTool({ name: "whoop_disconnect", arguments: {} });
+    expect(result.structuredContent).toMatchObject({ disconnected: true, revoked_at_whoop: true });
+    expect(revoked).toBe(1);
+    expect(await Bun.file(join(home, "tokens.json")).exists()).toBe(false);
+    const status = await client.callTool({ name: "whoop_status", arguments: {} });
+    expect(status.structuredContent).toMatchObject({ logged_in: false });
+  });
+
+  test("still deletes the login when WHOOP can't be reached, and says so", async () => {
+    await writeTokenFile(stored);
+    const { client } = await connect(OK_RESPONSES, undefined, { revokeAccess: async () => "failed" });
+    const result = await client.callTool({ name: "whoop_disconnect", arguments: {} });
+    expect(result.structuredContent).toMatchObject({ disconnected: true, revoked_at_whoop: false });
+    expect(text(result)).toContain("couldn't revoke");
+    expect(await Bun.file(join(home, "tokens.json")).exists()).toBe(false);
+  });
+
+  test("forget_app also deletes the saved app credentials", async () => {
+    await writeTokenFile(stored);
+    process.env.WHOOP_MCP_CREDENTIAL_STORE = "file";
+    await writeFile(join(home, "client.json"), JSON.stringify({ clientId: "id", clientSecret: "s" }));
+    const { client } = await connect(OK_RESPONSES, undefined, { revokeAccess: async () => "revoked" });
+    const result = await client.callTool({ name: "whoop_disconnect", arguments: { forget_app: true } });
+    expect(result.structuredContent).toMatchObject({ app_credentials_deleted: true });
+    expect(await Bun.file(join(home, "client.json")).exists()).toBe(false);
+  });
+
+  test("with nothing connected it says so and calls nothing", async () => {
+    let revoked = 0;
+    const { client } = await connect(OK_RESPONSES, undefined, {
+      revokeAccess: async () => {
+        revoked++;
+        return "revoked";
+      },
+    });
+    const result = await client.callTool({ name: "whoop_disconnect", arguments: {} });
+    expect(text(result)).toContain("wasn't connected");
+    expect(revoked).toBe(0);
+  });
+
+  test("cancels a connection page that is still open", async () => {
+    const flow = pageOnlyFlow();
+    const { client } = await connect(OK_RESPONSES, flow);
+    await client.callTool({ name: "whoop_login", arguments: { wait_seconds: 0 } });
+    expect(flow.status.state).toBe("pending");
+    await client.callTool({ name: "whoop_disconnect", arguments: {} });
+    expect(flow.status.state).toBe("idle");
   });
 });

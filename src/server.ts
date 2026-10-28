@@ -1,8 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { BackgroundLogin, type LoginStatus } from "./auth/background-login.ts";
-import { resolveClientCredentials } from "./auth/credentials.ts";
-import { readTokens, tokenPath } from "./auth/store.ts";
+import { deleteStoredCredentials, resolveClientCredentials } from "./auth/credentials.ts";
+import { deleteTokens, readTokens, tokenPath, withTokenLock } from "./auth/store.ts";
 import { SCOPES, VERSION } from "./config.ts";
 import { errorFields, log } from "./log.ts";
 import { DISCLAIMER, errorResult, jsonResult, LOGIN_WAIT_SECONDS, READ_ONLY, toolError } from "./tools/common.ts";
@@ -279,6 +279,53 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
         const seenProblems = before.state === "pending" ? (before.problemSeq ?? 0) : 0;
         const status = await loginFlow.waitForChange(wait_seconds * 1000, ctx?.mcpReq?.signal);
         return loginResult(status, { first: before.state !== "pending", kind, url: authorizeUrl, seenProblems });
+      } catch (err) {
+        return errorResult(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "whoop_disconnect",
+    {
+      title: "Disconnect WHOOP",
+      description:
+        "Disconnect the user's WHOOP account: revokes whoop-mcp's access at WHOOP and deletes the saved login on this computer. Only when the user asks to disconnect, log out or remove WHOOP access. With forget_app, also deletes the saved WHOOP app Client ID and Secret, so connecting again starts with the setup page. Asking about WHOOP data afterwards opens the connection page again.",
+      inputSchema: z.object({
+        forget_app: z
+          .boolean()
+          .default(false)
+          .describe("Also delete the saved WHOOP app credentials (Client ID and Secret)."),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ forget_app }) => {
+      try {
+        await loginFlow.cancel();
+        // (Optional calls: tests pass a stub client.) A refresh mid-flight must save before the delete.
+        await client.drain?.();
+        const hadLogin = (await readTokens()) !== null;
+        const revoked = hadLogin ? ((await client.revokeAccess?.()) ?? "failed") : "not_logged_in";
+        await withTokenLock(deleteTokens);
+        const forgot = forget_app ? await deleteStoredCredentials() : false;
+        log.info("disconnected from WHOOP", { had_login: hadLogin, revoked, forget_app });
+        const parts = [
+          !hadLogin
+            ? "WHOOP wasn't connected."
+            : revoked === "revoked"
+              ? "Disconnected from WHOOP: access was revoked at WHOOP and the saved login deleted."
+              : "Deleted the saved WHOOP login, but couldn't revoke access at WHOOP (it may already have ended). The user can also remove the app's access in the WHOOP developer dashboard.",
+          forget_app
+            ? forgot
+              ? "The saved WHOOP app credentials were deleted too."
+              : "No saved app credentials to delete."
+            : "",
+        ];
+        return textResult(parts.filter(Boolean).join(" "), {
+          disconnected: true,
+          revoked_at_whoop: revoked === "revoked",
+          app_credentials_deleted: forgot,
+        });
       } catch (err) {
         return errorResult(err);
       }

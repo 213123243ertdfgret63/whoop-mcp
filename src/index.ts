@@ -126,7 +126,14 @@ async function main(): Promise<void> {
     }
 
     case "logout":
-      // Local only: the grant itself is revoked in the WHOOP developer dashboard.
+      if ((await readTokens()) !== null) {
+        const revoked = await new WhoopClient().revokeAccess();
+        print(
+          revoked === "revoked"
+            ? "Revoked access at WHOOP."
+            : "Couldn't revoke access at WHOOP; deleting the login anyway.",
+        );
+      }
       await deleteTokens();
       print(`Deleted ${tokenPath()}.`);
       if (flag("--forget-app")) {

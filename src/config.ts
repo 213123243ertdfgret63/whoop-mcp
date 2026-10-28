@@ -23,6 +23,22 @@ export const SCOPES = [
   "read:workout",
 ] as const;
 
+/**
+ * The scopes in SCOPES that `granted` (a token response's space-separated `scope`) lacks. WHOOP's consent page
+ * lets people untick permissions, and an app may not have them all enabled. An absent `scope` can't be
+ * checked, so it counts as complete.
+ */
+export function missingScopes(granted: string | undefined): string[] {
+  if (granted === undefined) return [];
+  const have = new Set(granted.split(/\s+/).filter(Boolean));
+  return SCOPES.filter((s) => !have.has(s));
+}
+
+/** What to tell the user when WHOOP granted only some permissions. */
+export function missingScopesMessage(missing: string[]): string {
+  return `WHOOP didn't grant every permission whoop-mcp needs (missing: ${missing.join(", ")}), so it didn't connect. Approve all of them on WHOOP's page; if one isn't offered, tick it under Scopes in your WHOOP app. Then try again.`;
+}
+
 export const DEFAULT_REDIRECT_URI = "http://localhost:8787/callback";
 
 export interface ClientCredentials {

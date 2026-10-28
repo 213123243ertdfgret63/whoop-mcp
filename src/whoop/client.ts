@@ -1,5 +1,5 @@
 import { resolveClientCredentials } from "../auth/credentials.ts";
-import { OAuthHttpError, refreshTokens, toStored } from "../auth/oauth.ts";
+import { OAuthHttpError, refreshTokens, revokeAccess, toStored } from "../auth/oauth.ts";
 import { readTokens, type StoredTokens, withTokenLock, writeTokens } from "../auth/store.ts";
 import { type ClientCredentials, WHOOP } from "../config.ts";
 import { errorFields, log } from "../log.ts";
@@ -138,6 +138,20 @@ export class WhoopClient {
       ...(res.status === 429 ? { rate_limit: rateLimit } : {}),
     });
     return res;
+  }
+
+  /**
+   * Ends this app's access at WHOOP, using a valid access token (refreshing first if needed). "not_logged_in"
+   * when there is no usable login to revoke; "failed" when WHOOP couldn't be reached or said no.
+   */
+  async revokeAccess(): Promise<"revoked" | "failed" | "not_logged_in"> {
+    let tokens: StoredTokens;
+    try {
+      tokens = await this.validTokens();
+    } catch (err) {
+      return err instanceof NotLoggedInError ? "not_logged_in" : "failed";
+    }
+    return (await revokeAccess(tokens.access_token)) ? "revoked" : "failed";
   }
 
   /** Settles once any token refresh in flight has finished, including writing the new tokens to disk. */

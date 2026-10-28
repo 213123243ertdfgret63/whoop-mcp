@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { type BrowserSetupOptions, type BrowserSetupResult, browserSetup } from "../src/auth/browser-setup.ts";
 import type { TokenResponse } from "../src/auth/oauth.ts";
-import { type ClientCredentials, WHOOP } from "../src/config.ts";
+import { type ClientCredentials, SCOPES, WHOOP } from "../src/config.ts";
 import type { VerifyResult } from "../src/setup.ts";
 
 const TOKENS: TokenResponse = { access_token: "at", refresh_token: "rt", expires_in: 3600, token_type: "bearer" };
@@ -570,5 +570,45 @@ describe("review fixes", () => {
     expect(html).toContain('rel="noopener"');
     expect(html).toContain('"noopener,popup');
     await h.cancel();
+  });
+});
+
+describe("permissions", () => {
+  test("a partial grant isn't saved: it's revoked, the page explains, and approving again connects", async () => {
+    const revoked: string[] = [];
+    const persisted: TokenResponse[] = [];
+    let call = 0;
+    const h = await start({
+      exchange: async () =>
+        call++ === 0
+          ? { ...TOKENS, access_token: "partial", scope: "offline read:profile" }
+          : { ...TOKENS, scope: SCOPES.join(" ") },
+      revoke: async (t) => {
+        revoked.push(t);
+      },
+      persist: async (t) => {
+        persisted.push(t);
+      },
+    });
+    const res = await submit(h, goodForm(h));
+    const state = new URL(res.headers.get("location") ?? "").searchParams.get("state");
+    await fetch(`${h.base}/callback?code=c1&state=${state}`);
+    await Bun.sleep(30);
+    const status = (await (
+      await fetch(`${h.base}/setup/status`, { headers: { "X-Setup-Token": h.token } })
+    ).json()) as {
+      phase: string;
+      problem?: string;
+    };
+    expect(status.phase).toBe("authorizing");
+    expect(status.problem).toContain("read:sleep");
+    expect(revoked).toEqual(["partial"]);
+    expect(persisted).toEqual([]);
+
+    const retry = await fetch(`${h.base}/setup/authorize?t=${h.token}`, { redirect: "manual" });
+    const newState = new URL(retry.headers.get("location") ?? "").searchParams.get("state");
+    await fetch(`${h.base}/callback?code=c2&state=${newState}`);
+    expect((await h.result).tokens.scope).toBe(SCOPES.join(" "));
+    expect(persisted).toHaveLength(1);
   });
 });

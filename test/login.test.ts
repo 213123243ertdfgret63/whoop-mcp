@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { login } from "../src/auth/login.ts";
-import { OAuthHttpError } from "../src/auth/oauth.ts";
-import { type ClientCredentials, WHOOP } from "../src/config.ts";
+import { MissingScopesError, OAuthHttpError } from "../src/auth/oauth.ts";
+import { type ClientCredentials, missingScopes, SCOPES, WHOOP } from "../src/config.ts";
 
 const originalFetch = globalThis.fetch;
 const originalEnv = { ...process.env };
@@ -255,5 +255,35 @@ describe("login()", () => {
     expect(err).toBeInstanceOf(OAuthHttpError);
     expect((err as OAuthHttpError).status).toBe(401);
     expect((err as OAuthHttpError).message).toContain("invalid_client");
+  });
+});
+
+describe("permissions", () => {
+  test("a login without every permission is refused and revoked at WHOOP", async () => {
+    tokenResponder = () => Response.json({ ...TOKENS, scope: "offline read:profile read:cycles" });
+    const port = await freePort();
+    const revoked: string[] = [];
+    const announced = Promise.withResolvers<string>();
+    const promise = login(credsFor(port), {
+      openBrowser: false,
+      timeoutMs: 1500,
+      onAuthorizeUrl: announced.resolve,
+      revoke: async (token) => {
+        revoked.push(token);
+      },
+    });
+    promise.catch(() => {});
+    const state = new URL(await announced.promise).searchParams.get("state") ?? "";
+    await originalFetch(`http://127.0.0.1:${port}/callback?code=c&state=${state}`);
+    const err = await promise.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MissingScopesError);
+    expect((err as Error).message).toContain("read:sleep");
+    expect(revoked).toEqual([TOKENS.access_token]);
+  });
+
+  test("missingScopes lists what's missing, and can't judge a reply without a scope", () => {
+    expect(missingScopes(SCOPES.join(" "))).toEqual([]);
+    expect(missingScopes("offline read:profile")).toContain("read:workout");
+    expect(missingScopes(undefined)).toEqual([]);
   });
 });

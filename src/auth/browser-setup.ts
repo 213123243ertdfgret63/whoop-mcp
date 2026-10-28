@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { openUrl } from "../cli/terminal.ts";
-import { type ClientCredentials, SCOPES } from "../config.ts";
+import { type ClientCredentials, missingScopes, missingScopesMessage, SCOPES } from "../config.ts";
 import { log } from "../log.ts";
 import { DASHBOARD_URL, PRIVACY_URL, type VerifyResult, verifyCredentials } from "../setup.ts";
 import { type CredentialSource, saveCredentials } from "./credentials.ts";
@@ -13,7 +13,14 @@ import {
   parseRedirect,
   wrongStatePage,
 } from "./login.ts";
-import { buildAuthorizeUrl, exchangeCode, randomState, randomToken, type TokenResponse } from "./oauth.ts";
+import {
+  buildAuthorizeUrl,
+  exchangeCode,
+  randomState,
+  randomToken,
+  revokeAccess,
+  type TokenResponse,
+} from "./oauth.ts";
 import { cspFor, htmlPage, newNonce } from "./page-style.ts";
 
 /**
@@ -54,6 +61,8 @@ export interface BrowserSetupOptions {
   clientId?: string;
   /** Saves the tokens; runs before the page says "connected", so a failed save is never shown as success. */
   persist?: (tokens: TokenResponse) => Promise<void>;
+  /** Injectable for tests: revokes a token WHOOP issued with too few permissions. */
+  revoke?: (accessToken: string) => Promise<unknown>;
   /** Injectable for tests. */
   verify?: (creds: ClientCredentials) => Promise<VerifyResult>;
   save?: (creds: ClientCredentials) => Promise<CredentialSource>;
@@ -421,8 +430,11 @@ else if (id.value) setStep(2);
 /** Where WHOOP sends the browser after approval: follows the token exchange instead of claiming success early. */
 function finishingPage(token: string): Response {
   const nonce = newNonce();
+  const esc = Bun.escapeHTML;
   const body = `<h1 id="title">Finishing…</h1>
 <p id="text">WHOOP approved access. Connecting…</p>
+<div id="retry" class="actions" hidden><a class="button" href="${SETUP_PATH}/authorize?t=${esc(token)}">Try again</a>
+<a class="button quiet" href="${SETUP_PATH}?t=${esc(token)}">Back to setup</a></div>
 <noscript><p><a href="${SETUP_PATH}/done?t=${Bun.escapeHTML(token)}">Check whether it worked</a></p></noscript>`;
   const script = `
 "use strict";
@@ -445,11 +457,18 @@ const token = ${scriptJson(token)};
       document.getElementById("text").textContent = s.problem || "Ask Claude to try again.";
       return;
     }
+    // Back to approving with a problem, e.g. not every permission granted: fix it and try again from here.
+    if (s.phase === "authorizing" && s.problem) {
+      document.getElementById("title").textContent = "WHOOP didn't connect";
+      document.getElementById("text").textContent = s.problem;
+      document.getElementById("retry").hidden = false;
+      return;
+    }
     await new Promise((r) => setTimeout(r, 1000));
   }
   document.getElementById("text").textContent = "Check the chat in Claude to see whether it worked.";
 })();`;
-  return htmlResponse(htmlPage({ title: "Connecting WHOOP", nonce, body, script }), nonce);
+  return htmlResponse(htmlPage({ title: "Connecting WHOOP", nonce, body, script, css: SETUP_CSS }), nonce);
 }
 
 /** The callback after WHOOP refused (bad redirect URL, unknown client, denied): fix and retry from here. */
@@ -471,6 +490,7 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
   const verifyCreds = opts.verify ?? verifyCredentials;
   const save = opts.save ?? saveCredentials;
   const exchange = opts.exchange ?? ((creds, code) => exchangeCode(creds, code));
+  const revoke = opts.revoke ?? revokeAccess;
   const idleMs = opts.idleTimeoutMs ?? 20 * 60_000;
   const graceMs = opts.graceMs ?? 60_000;
 
@@ -491,7 +511,7 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
   let lastClientId = opts.clientId;
   const verifyTimes: number[] = [];
   // Settles with WHOOP's authorization code once the user approved, or rejects on cancel or a timeout.
-  const authorized = Promise.withResolvers<{ code: string }>();
+  const authorized = Promise.withResolvers<{ tokens: TokenResponse }>();
 
   const setPhase = (next: SetupPhase, nextProblem?: string) => {
     phase = next;
@@ -590,6 +610,36 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
     }
   };
 
+  /**
+   * After WHOOP approved: exchange the code, insist on every permission, save, and only then report "done".
+   * A partial grant is revoked and leaves the flow open, so the user can approve again from the page.
+   */
+  const finish = async (code: string) => {
+    if (!submitted) return authorized.reject(new Error("WHOOP setup finished without credentials."));
+    let tokens: TokenResponse;
+    try {
+      tokens = await exchange(submitted.creds, code);
+    } catch (err) {
+      setPhase("failed", "WHOOP approved access, but finishing the connection failed. Ask Claude to try again.");
+      return authorized.reject(err);
+    }
+    const missing = missingScopes(tokens.scope);
+    if (missing.length) {
+      log.warn("WHOOP granted only some permissions; not connecting", { missing });
+      await revoke(tokens.access_token);
+      touch();
+      return setPhase("authorizing", missingScopesMessage(missing));
+    }
+    try {
+      await opts.persist?.(tokens);
+    } catch (err) {
+      setPhase("failed", "WHOOP approved access, but saving the login failed. Ask Claude to try again.");
+      return authorized.reject(err);
+    }
+    setPhase("done");
+    authorized.resolve({ tokens });
+  };
+
   const tokenOk = (req: Request, url: URL) =>
     sameSecret(req.headers.get("x-setup-token") ?? url.searchParams.get("t"), token);
   const expired = () =>
@@ -619,7 +669,7 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
       touch();
       if (outcome.kind === "code") {
         setPhase("exchanging");
-        authorized.resolve({ code: outcome.code });
+        void finish(outcome.code);
         return finishingPage(token);
       }
       // WHOOP refused (wrong redirect URL, unknown client, access denied): keep the flow alive so the user can
@@ -644,6 +694,7 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
       if (phase === "done")
         return page("WHOOP connected", "Claude is continuing in the chat. You can close this tab.", 200, "ok");
       if (phase === "failed") return page("WHOOP didn't connect", problem ?? "Ask Claude to try again.", 200, "err");
+      if (phase === "authorizing" && problem) return callbackProblemPage(token, problem);
       return finishingPage(token);
     }
     if (closing) return page("Finished", "This setup has finished. Check the chat in Claude.", 410);
@@ -766,18 +817,9 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
   if (opts.openBrowser ?? true) openUrl(setupUrl);
 
   try {
-    const { code } = await authorized.promise;
+    const { tokens } = await authorized.promise;
     if (!submitted) throw new Error("WHOOP setup finished without credentials.");
     const { creds, saved } = submitted;
-    let tokens: TokenResponse;
-    try {
-      tokens = await exchange(creds, code);
-      await opts.persist?.(tokens);
-    } catch (err) {
-      setPhase("failed", "WHOOP approved access, but finishing the connection failed. Ask Claude to try again.");
-      throw err;
-    }
-    setPhase("done");
     return { creds, saved, tokens };
   } catch (err) {
     // (phase changes inside the request handlers, which TypeScript's narrowing can't see)

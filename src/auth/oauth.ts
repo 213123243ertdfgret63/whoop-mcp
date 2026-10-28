@@ -1,4 +1,5 @@
-import { type ClientCredentials, SCOPES, WHOOP } from "../config.ts";
+import { type ClientCredentials, missingScopesMessage, SCOPES, WHOOP } from "../config.ts";
+import { errorFields, log } from "../log.ts";
 import type { StoredTokens } from "./store.ts";
 
 export interface TokenResponse {
@@ -8,6 +9,33 @@ export interface TokenResponse {
   token_type: string;
   scope?: string;
   id_token?: string;
+}
+
+/** WHOOP granted only some of the permissions; the login was refused (and revoked). */
+export class MissingScopesError extends Error {
+  override name = "MissingScopesError";
+  constructor(readonly missing: string[]) {
+    super(missingScopesMessage(missing));
+  }
+}
+
+/**
+ * Revokes this app's access to the user's WHOOP account (DELETE /v2/user/access), which ends the login at
+ * WHOOP, not only on this computer. Returns whether WHOOP confirmed it; never throws.
+ */
+export async function revokeAccess(accessToken: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${WHOOP.apiBase}/v2/user/access`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    log.info("revoked WHOOP access", { status: res.status });
+    return res.ok;
+  } catch (err) {
+    log.warn("could not revoke WHOOP access", errorFields(err));
+    return false;
+  }
 }
 
 export class OAuthHttpError extends Error {

@@ -515,3 +515,32 @@ describe("retryDelayMs", () => {
     expect(retryDelayMs(new Response(null))).toBe(2000);
   });
 });
+
+describe("WhoopClient.revokeAccess", () => {
+  test("sends DELETE /v2/user/access with the current access token", async () => {
+    await writeTokens(tokens());
+    let seen = null as { method?: string; auth: string | null } | null;
+    const fake = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url === `${WHOOP.apiBase}/v2/user/access`) {
+        seen = { method: init?.method, auth: new Headers(init?.headers).get("Authorization") };
+        return new Response(null, { status: 204 });
+      }
+      return fake(input, init);
+    }) as typeof fetch;
+    expect(await client().revokeAccess()).toBe("revoked");
+    expect(seen).toEqual({ method: "DELETE", auth: "Bearer access-1" });
+  });
+
+  test("reports not_logged_in without tokens, and failed when WHOOP refuses", async () => {
+    expect(await client().revokeAccess()).toBe("not_logged_in");
+    await writeTokens(tokens());
+    const fake = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
+      String(input).endsWith("/v2/user/access")
+        ? new Response("no", { status: 500 })
+        : fake(input, init)) as typeof fetch;
+    expect(await client().revokeAccess()).toBe("failed");
+  });
+});

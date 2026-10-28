@@ -58,14 +58,15 @@ const negotiated = (client: Client) =>
 
 for (const [label, options, expectedVersion] of eras) {
   describe(`stdio server, ${label}`, () => {
-    test("lists the tools; everything except whoop_login is read-only", async () => {
+    test("lists the tools; everything except whoop_login and whoop_disconnect is read-only", async () => {
       const client = await connect([process.execPath, "run", ENTRY], options);
       try {
         expect(negotiated(client)).toBe(expectedVersion);
         const { tools } = await client.listTools();
         expect(tools.map((t) => t.name)).toContain("whoop_today");
         expect(tools.map((t) => t.name)).toContain("whoop_status");
-        for (const t of tools) expect(t.annotations?.readOnlyHint).toBe(t.name !== "whoop_login");
+        const writes = new Set(["whoop_login", "whoop_disconnect"]);
+        for (const t of tools) expect(t.annotations?.readOnlyHint).toBe(!writes.has(t.name));
       } finally {
         await client.close();
       }
