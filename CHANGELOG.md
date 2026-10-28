@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.0 (2026-10-28)
+
+- Fix review findings in the new connect flow (69a92b5)
+- Connect WHOOP with minimal input: Claude waits, the page does the rest (5ebfaa4)
+- Fix audit findings and remove leftovers from before the extension (8040780)
+
 ## v0.3.0 (2026-10-28)
 
 - **Breaking:** whoop-mcp now installs only as a Claude Desktop extension (`.mcpb`). `install.sh`, `uninstall.sh`, `whoop-mcp claude add/remove` and Claude Code support are gone. Remove a pre-0.3 `whoop` server first (see the README's Install section).
