@@ -612,3 +612,72 @@ describe("permissions", () => {
     expect(persisted).toHaveLength(1);
   });
 });
+
+describe("cancel and repeat callbacks", () => {
+  test("cancelling during the code exchange revokes the new login instead of saving it", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const revoked: string[] = [];
+    const persisted: TokenResponse[] = [];
+    const h = await start({
+      exchange: async () => {
+        await gate;
+        return { ...TOKENS, access_token: "late", scope: SCOPES.join(" ") };
+      },
+      revoke: async (t) => {
+        revoked.push(t);
+      },
+      persist: async (t) => {
+        persisted.push(t);
+      },
+    });
+    const res = await submit(h, goodForm(h));
+    const state = new URL(res.headers.get("location") ?? "").searchParams.get("state");
+    await fetch(`${h.base}/callback?code=c&state=${state}`);
+    const cancelled = h.cancel();
+    await Bun.sleep(20);
+    release();
+    await cancelled; // returns only once the exchange has finished and been undone
+    await expect(h.result).rejects.toThrow("cancelled");
+    expect(revoked).toEqual(["late"]);
+    expect(persisted).toEqual([]);
+  });
+
+  test("reloading the callback doesn't exchange the code a second time", async () => {
+    let exchanges = 0;
+    const h = await start({
+      exchange: async () => {
+        exchanges++;
+        await Bun.sleep(30);
+        return TOKENS;
+      },
+    });
+    const res = await submit(h, goodForm(h));
+    const state = new URL(res.headers.get("location") ?? "").searchParams.get("state");
+    await fetch(`${h.base}/callback?code=c&state=${state}`);
+    await fetch(`${h.base}/callback?code=c&state=${state}`);
+    await h.result;
+    expect(exchanges).toBe(1);
+  });
+
+  test("after a partial grant, reloading that callback leaves the flow open for Try again", async () => {
+    let call = 0;
+    const h = await start({
+      exchange: async () =>
+        call++ === 0 ? { ...TOKENS, scope: "offline read:profile" } : { ...TOKENS, scope: SCOPES.join(" ") },
+      revoke: async () => {},
+    });
+    const res = await submit(h, goodForm(h));
+    const state = new URL(res.headers.get("location") ?? "").searchParams.get("state");
+    await fetch(`${h.base}/callback?code=c1&state=${state}`);
+    await Bun.sleep(30);
+    expect((await fetch(`${h.base}/callback?code=c1&state=${state}`)).status).toBe(409);
+    expect(call).toBe(1);
+    const retry = await fetch(`${h.base}/setup/authorize?t=${h.token}`, { redirect: "manual" });
+    const newState = new URL(retry.headers.get("location") ?? "").searchParams.get("state");
+    await fetch(`${h.base}/callback?code=c2&state=${newState}`);
+    expect((await h.result).tokens.scope).toBe(SCOPES.join(" "));
+  });
+});

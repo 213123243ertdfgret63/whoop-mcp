@@ -307,7 +307,7 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
         const hadLogin = (await readTokens()) !== null;
         const revoked = hadLogin ? ((await client.revokeAccess?.()) ?? "failed") : "not_logged_in";
         await withTokenLock(deleteTokens);
-        const forgot = forget_app ? await deleteStoredCredentials() : false;
+        const forgot = forget_app ? await deleteStoredCredentials() : "none";
         log.info("disconnected from WHOOP", { had_login: hadLogin, revoked, forget_app });
         const parts = [
           !hadLogin
@@ -315,16 +315,19 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
             : revoked === "revoked"
               ? "Disconnected from WHOOP: access was revoked at WHOOP and the saved login deleted."
               : "Deleted the saved WHOOP login, but couldn't revoke access at WHOOP (it may already have ended). The user can also remove the app's access in the WHOOP developer dashboard.",
-          forget_app
-            ? forgot
+          !forget_app
+            ? ""
+            : forgot === "deleted"
               ? "The saved WHOOP app credentials were deleted too."
-              : "No saved app credentials to delete."
-            : "",
+              : forgot === "failed"
+                ? "The saved WHOOP app credentials couldn't be removed from the keychain; the user can delete the 'whoop-mcp' item in Keychain Access."
+                : "There were no saved app credentials to delete.",
         ];
         return textResult(parts.filter(Boolean).join(" "), {
           disconnected: true,
           revoked_at_whoop: revoked === "revoked",
-          app_credentials_deleted: forgot,
+          app_credentials_deleted: forgot === "deleted",
+          ...(forgot === "failed" ? { app_credentials_delete_failed: true } : {}),
         });
       } catch (err) {
         return errorResult(err);

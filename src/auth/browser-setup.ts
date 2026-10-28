@@ -512,6 +512,13 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
   const verifyTimes: number[] = [];
   // Settles with WHOOP's authorization code once the user approved, or rejects on cancel or a timeout.
   const authorized = Promise.withResolvers<{ tokens: TokenResponse }>();
+  // Set once the flow is over (cancelled or timed out): a code exchange still running must then not save.
+  let ended = false;
+  const end = (err: Error) => {
+    ended = true;
+    authorized.reject(err);
+  };
+  let finishing: Promise<void> | null = null;
 
   const setPhase = (next: SetupPhase, nextProblem?: string) => {
     phase = next;
@@ -523,10 +530,7 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
   const touch = () => {
     clearTimeout(idleTimer);
     if (phase === "done" || phase === "failed") return;
-    idleTimer = setTimeout(
-      () => authorized.reject(new Error("The WHOOP setup page wasn't used for a while, so it closed.")),
-      idleMs,
-    );
+    idleTimer = setTimeout(() => end(new Error("The WHOOP setup page wasn't used for a while, so it closed.")), idleMs);
   };
 
   const authorize = (creds: ClientCredentials) => {
@@ -619,6 +623,11 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
     let tokens: TokenResponse;
     try {
       tokens = await exchange(submitted.creds, code);
+      if (ended) {
+        // Cancelled (e.g. the user disconnected) while WHOOP was answering: undo the grant, save nothing.
+        await revoke(tokens.access_token);
+        return;
+      }
     } catch (err) {
       setPhase("failed", "WHOOP approved access, but finishing the connection failed. Ask Claude to try again.");
       return authorized.reject(err);
@@ -627,6 +636,8 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
     if (missing.length) {
       log.warn("WHOOP granted only some permissions; not connecting", { missing });
       await revoke(tokens.access_token);
+      // That approval is used up; Try again starts a new one, and a reload of this callback does nothing.
+      authorization = null;
       touch();
       return setPhase("authorizing", missingScopesMessage(missing));
     }
@@ -662,14 +673,26 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
     const url = new URL(req.url);
 
     if (url.pathname === redirect.pathname) {
-      if (!authorization) return page("Not ready", "Finish the setup page first.", 409, "err");
+      if (!authorization) {
+        // No token-bearing links here: without a pending approval this request's state can't be checked.
+        return problem
+          ? page(
+              "Already handled",
+              "This WHOOP approval was already handled. Use the setup tab to try again.",
+              409,
+              "err",
+            )
+          : page("Not ready", "Finish the setup page first.", 409, "err");
+      }
       const outcome = parseCallback(url, authorization.state);
       if (outcome.kind === "wrong-state") return wrongStatePage();
       if (closing) return finishingPage(token);
       touch();
       if (outcome.kind === "code") {
+        // A reload or second request of the same callback must not exchange the (single-use) code again.
+        if (phase === "exchanging" || phase === "done") return finishingPage(token);
         setPhase("exchanging");
-        void finish(outcome.code);
+        finishing = finish(outcome.code);
         return finishingPage(token);
       }
       // WHOOP refused (wrong redirect URL, unknown client, access denied): keep the flow alive so the user can
@@ -801,11 +824,11 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
   };
 
   const hardTimeout = setTimeout(
-    () => authorized.reject(new Error("Timed out waiting for WHOOP setup to finish in the browser.")),
+    () => end(new Error("Timed out waiting for WHOOP setup to finish in the browser.")),
     opts.timeoutMs ?? 60 * 60_000,
   );
   const onAbort = () => {
-    authorized.reject(new Error("WHOOP setup was cancelled."));
+    end(new Error("WHOOP setup was cancelled."));
     stop(); // also ends the grace period, so the port is free for the next login at once
   };
   if (opts.signal?.aborted) onAbort();
@@ -829,6 +852,9 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
   } finally {
     clearTimeout(hardTimeout);
     clearTimeout(idleTimer);
+    // A cancel waits for an exchange in flight (which then revokes instead of saving), so whoever cancelled,
+    // e.g. whoop_disconnect, can be sure no login appears afterwards.
+    await (finishing as Promise<void> | null)?.catch(() => {});
     // Keep answering status for a while, so the browser tab can show how it ended; cancel stops it early.
     closing = true;
     if (opts.signal?.aborted) stop();

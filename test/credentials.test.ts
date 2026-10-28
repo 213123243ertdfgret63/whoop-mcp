@@ -147,17 +147,29 @@ describe("file store (WHOOP_MCP_CREDENTIAL_STORE=file)", () => {
 });
 
 describe("deleteStoredCredentials", () => {
+  test("reports failed when the keychain holds the credentials but won't delete them", async () => {
+    await saveCredentials(creds);
+    const del = spyOn(Bun.secrets, "delete").mockImplementation(async () => {
+      throw new Error("user denied");
+    });
+    try {
+      expect(await deleteStoredCredentials()).toBe("failed");
+    } finally {
+      del.mockRestore();
+    }
+  });
+
   test("removes credentials from both stores and reports it", async () => {
     keychain.set("whoop-mcp/client-credentials", JSON.stringify(creds));
     await writeFile(credentialFilePath(), JSON.stringify(creds));
-    expect(await deleteStoredCredentials()).toBe(true);
+    expect(await deleteStoredCredentials()).toBe("deleted");
     expect(keychain.size).toBe(0);
     expect(await Bun.file(credentialFilePath()).exists()).toBe(false);
     expect(await readStoredCredentials()).toBeNull();
   });
 
   test("reports false when nothing was stored", async () => {
-    expect(await deleteStoredCredentials()).toBe(false);
+    expect(await deleteStoredCredentials()).toBe("none");
   });
 });
 

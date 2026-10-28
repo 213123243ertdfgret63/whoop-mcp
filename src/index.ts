@@ -137,7 +137,14 @@ async function main(): Promise<void> {
       await deleteTokens();
       print(`Deleted ${tokenPath()}.`);
       if (flag("--forget-app")) {
-        print((await deleteStoredCredentials()) ? "Deleted saved app credentials." : "No saved app credentials.");
+        const forgot = await deleteStoredCredentials();
+        print(
+          forgot === "deleted"
+            ? "Deleted saved app credentials."
+            : forgot === "failed"
+              ? "Couldn't delete the app credentials from the keychain; remove the 'whoop-mcp' item in Keychain Access."
+              : "No saved app credentials.",
+        );
       }
       return;
 

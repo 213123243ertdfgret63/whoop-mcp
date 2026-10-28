@@ -78,22 +78,33 @@ export async function saveCredentials(creds: ClientCredentials): Promise<Credent
   return "file";
 }
 
-/** Removes stored credentials from both stores. Returns whether anything was removed. */
-export async function deleteStoredCredentials(): Promise<boolean> {
-  let removed = false;
+/**
+ * Removes stored credentials from both stores. "failed" means the keychain holds them but refused to delete
+ * them (locked, or the user clicked Deny), so the caller must not claim they're gone.
+ */
+export async function deleteStoredCredentials(): Promise<"deleted" | "none" | "failed"> {
+  let result: "deleted" | "none" | "failed" = "none";
   if (keychainEnabled()) {
+    let present = false;
     try {
-      removed = await Bun.secrets.delete(KEYCHAIN);
+      present = (await Bun.secrets.get(KEYCHAIN)) !== null;
     } catch {
-      // Nothing to remove from an unavailable keychain.
+      // No usable keychain, so nothing stored there.
+    }
+    if (present) {
+      try {
+        result = (await Bun.secrets.delete(KEYCHAIN)) ? "deleted" : "failed";
+      } catch {
+        result = "failed";
+      }
     }
   }
   const file = Bun.file(credentialFilePath());
   if (await file.exists()) {
     await rm(credentialFilePath(), { force: true });
-    removed = true;
+    if (result === "none") result = "deleted";
   }
-  return removed;
+  return result;
 }
 
 /** Env vars win (handy for development), then whatever setup stored. */
