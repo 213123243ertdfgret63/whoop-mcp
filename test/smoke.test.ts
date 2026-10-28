@@ -114,3 +114,42 @@ test.skipIf(!binary)("compiled binary serves stdio", async () => {
     await client.close();
   }
 });
+
+test("in serve mode it logs to its file, keeps routine lines off stderr, and exits when stdin closes", async () => {
+  const logHome = await mkdtemp(join(tmpdir(), "whoop-mcp-serve-"));
+  try {
+    const proc = Bun.spawn(["bun", "run", ENTRY], {
+      // No WHOOP_MCP_LOG_FILE: the server picks its default, which WHOOP_MCP_HOME puts under <home>/logs.
+      env: { PATH: process.env.PATH ?? "", WHOOP_MCP_HOME: logHome, WHOOP_MCP_CREDENTIAL_STORE: "file" },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const send = (msg: unknown) => proc.stdin.write(`${JSON.stringify(msg)}\n`);
+    send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "smoke", version: "1" } },
+    });
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "whoop_status", arguments: {} } });
+    // Wait for the tool's answer before hanging up.
+    const reader = proc.stdout.getReader();
+    let out = "";
+    while (!out.includes('"id":2')) out += new TextDecoder().decode((await reader.read()).value);
+    await proc.stdin.end();
+
+    const exitCode = await Promise.race([proc.exited, Bun.sleep(5000).then(() => "timeout")]);
+    expect(exitCode).toBe(0);
+    const logFile = join(logHome, "logs", "whoop-mcp.log");
+    const log = await Bun.file(logFile).text();
+    expect(log).toContain(" INFO  starting ");
+    expect(log).toContain("tool whoop_status ok");
+    expect(log).toContain("client disconnected");
+    expect((await Bun.file(logFile).stat()).mode & 0o777).toBe(0o600);
+    expect(await new Response(proc.stderr).text()).not.toContain(" INFO ");
+  } finally {
+    await rm(logHome, { recursive: true, force: true });
+  }
+});

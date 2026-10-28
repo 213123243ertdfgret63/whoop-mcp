@@ -260,8 +260,24 @@ describe("fetchDays first_data_date", () => {
   test("is set only when WHOOP has nothing older than the window", async () => {
     const none = await fetchDays(getter([]), "2026-10-20", "2026-10-27");
     expect(none.first_data_date).toBe("2026-10-26");
-    const some = await fetchDays(getter([cycles[0]]), "2026-10-20", "2026-10-27");
+    const older = cycle(0, "2026-09-01T22:00:00Z", "2026-09-02T22:00:00Z");
+    const some = await fetchDays(getter([older]), "2026-10-20", "2026-10-27");
     expect(some.first_data_date).toBeUndefined();
+  });
+
+  test("a cycle already fetched in the margin before the range means the gap is missed wear", async () => {
+    // Labelled 10-19 (before `from`), fetched because of the two-day margin; then nothing until 10-26.
+    const margin = cycle(5, "2026-10-18T23:00:00Z", "2026-10-19T23:00:00Z");
+    const g = {
+      calls: [] as Record<string, unknown>[],
+      async get<T>(path: string, query?: Record<string, string | number | undefined>): Promise<T> {
+        if (query) this.calls.push(query);
+        return { records: path === PATHS.cycles ? [margin, ...cycles] : [] } as T;
+      },
+    };
+    const res = await fetchDays(g, "2026-10-20", "2026-10-27");
+    expect(res.first_data_date).toBeUndefined();
+    expect(g.calls.some((c) => c.limit === 1)).toBe(false);
   });
 
   test("makes no extra request when the window starts with data", async () => {

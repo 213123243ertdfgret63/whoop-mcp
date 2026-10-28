@@ -56,27 +56,17 @@ const credsFor = (port: number, host = "127.0.0.1"): ClientCredentials => ({
   redirectUri: `http://${host}:${port}/callback`,
 });
 
-/** Waits until login() has logged the authorize URL (i.e. the callback server is listening) and returns it. */
-async function authorizeUrl(): Promise<URL> {
-  for (let i = 0; i < 200; i++) {
-    for (const call of errorSpy.mock.calls) {
-      const match = call
-        .map(String)
-        .join(" ")
-        .match(/https:\/\/\S+oauth2\/auth\S*/);
-      if (match) return new URL(match[0]);
-    }
-    await Bun.sleep(5);
-  }
-  throw new Error("login() never logged the authorize URL");
-}
-
-async function startLogin(opts: { host?: string; pkce?: boolean; timeoutMs?: number } = {}) {
+async function startLogin(opts: { host?: string; timeoutMs?: number } = {}) {
   const port = await freePort();
   const creds = credsFor(port, opts.host);
-  const promise = login(creds, { openBrowser: false, timeoutMs: opts.timeoutMs ?? 1500, pkce: opts.pkce });
+  const announced = Promise.withResolvers<string>();
+  const promise = login(creds, {
+    openBrowser: false,
+    timeoutMs: opts.timeoutMs ?? 1500,
+    onAuthorizeUrl: announced.resolve,
+  });
   promise.catch(() => {}); // Assertions attach later; avoid an unhandled-rejection report in between.
-  const url = await authorizeUrl();
+  const url = new URL(await announced.promise);
   const state = url.searchParams.get("state") ?? "";
   const callback = (query: Record<string, string>, path = "/callback") =>
     originalFetch(`http://127.0.0.1:${port}${path}?${new URLSearchParams(query)}`);
@@ -84,7 +74,7 @@ async function startLogin(opts: { host?: string; pkce?: boolean; timeoutMs?: num
 }
 
 describe("login()", () => {
-  test("a valid callback exchanges the code and returns the tokens plus the other callback params", async () => {
+  test("a valid callback exchanges the code and returns the tokens", async () => {
     const { promise, state, callback, creds } = await startLogin();
     const res = await callback({ code: "auth-code", state, scope: "read:profile offline" });
     expect(res.status).toBe(200);
@@ -93,8 +83,6 @@ describe("login()", () => {
 
     const result = await promise;
     expect(result.tokens).toEqual(TOKENS);
-    expect(result.callbackParams).toEqual({ state, scope: "read:profile offline" });
-    expect(result.callbackParams).not.toHaveProperty("code");
 
     expect(tokenRequests).toHaveLength(1);
     const body = new URLSearchParams(await tokenRequests[0]!.text());
@@ -153,9 +141,15 @@ describe("login()", () => {
   test("aborting the signal cancels the login and frees the port", async () => {
     const controller = new AbortController();
     const port = await freePort();
-    const promise = login(credsFor(port), { openBrowser: false, timeoutMs: 5000, signal: controller.signal });
+    const announced = Promise.withResolvers<string>();
+    const promise = login(credsFor(port), {
+      openBrowser: false,
+      timeoutMs: 5000,
+      signal: controller.signal,
+      onAuthorizeUrl: announced.resolve,
+    });
     promise.catch(() => {});
-    await authorizeUrl();
+    await announced.promise;
     controller.abort();
     await expect(promise).rejects.toThrow("cancelled");
     Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() }).stop(true);
@@ -197,27 +191,6 @@ describe("login()", () => {
     expect(await res.text()).toContain("No authorization code");
     await expect(promise).rejects.toThrow("Callback had no authorization code.");
     expect(tokenRequests).toHaveLength(0);
-  });
-
-  test("with PKCE the authorize URL carries an S256 challenge that matches the verifier sent to the token endpoint", async () => {
-    const { promise, state, callback, url } = await startLogin({ pkce: true });
-    const challenge = url.searchParams.get("code_challenge");
-    expect(challenge).toBeTruthy();
-    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
-
-    await callback({ code: "c", state });
-    await promise;
-    const verifier = new URLSearchParams(await tokenRequests[0]!.text()).get("code_verifier");
-    expect(verifier).toBeTruthy();
-    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier ?? "")));
-    expect(Buffer.from(digest).toString("base64url")).toBe(challenge ?? "");
-  });
-
-  test("without PKCE the authorize URL has no code_challenge", async () => {
-    const { promise, state, callback, url } = await startLogin();
-    expect(url.searchParams.has("code_challenge")).toBe(false);
-    await callback({ code: "c", state });
-    await promise;
   });
 
   for (const redirectUri of [

@@ -28,6 +28,7 @@ export async function verifyCredentials(creds: ClientCredentials): Promise<Verif
         client_id: creds.clientId,
         client_secret: creds.clientSecret,
       }),
+      signal: AbortSignal.timeout(15_000),
     });
   } catch (err) {
     return { ok: "unknown", reason: `could not reach WHOOP (${(err as Error).message})` };

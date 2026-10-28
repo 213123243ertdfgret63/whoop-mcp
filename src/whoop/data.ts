@@ -150,10 +150,13 @@ export async function fetchDays(
   // Leading days without data are either before the account existed or a wear gap. One request tells them
   // apart: the API lists newest first, so a single record ending before the window means older data exists.
   const firstIdx = days.findIndex((d) => d.cycle);
+  const firstCycle = days[firstIdx]?.cycle;
   let first_data_date: IsoDate | undefined;
-  if (!truncated && firstIdx > 0) {
-    const older = await client.get<{ records?: Cycle[] }>(PATHS.cycles, { limit: 1, end: start.toISOString() });
-    if (!older.records?.length) first_data_date = days[firstIdx]?.date;
+  // The fetch margin may already hold an earlier cycle (labelled before `from`): then the gap is missed wear.
+  const earlierFetched = cycles.records.some((c) => cycleDate(c) < from);
+  if (!truncated && firstIdx > 0 && firstCycle && !earlierFetched) {
+    const older = await client.get<{ records?: Cycle[] }>(PATHS.cycles, { limit: 1, end: firstCycle.start });
+    if (!older.records?.some((c) => c.id !== firstCycle.id)) first_data_date = days[firstIdx]?.date;
   }
   return { days, truncated, ...(first_data_date ? { first_data_date } : {}) };
 }

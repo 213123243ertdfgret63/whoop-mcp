@@ -1,0 +1,49 @@
+name: Bundle
+
+# The macOS-only parts of the extension build (ad-hoc signing, the minimum-macOS check, running both Mac
+# binaries) can't run on the Ubuntu CI job. macOS runners are costly, so this runs only when the build changes,
+# instead of first showing up as a failed release after the tag is pushed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/build-mcpb.ts
+      - package.json
+      - bun.lock
+      - .bun-version
+      - src/index.ts
+      - .github/workflows/bundle.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      HUSKY: "0"
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build the Claude Desktop extensions
+        run: bun run build:mcpb
+
+      - name: Start both Mac binaries through the launcher
+        run: |
+          mkdir -p dist/check && unzip -q dist/whoop-mcp-macos.mcpb -d dist/check
+          version="$(bun -p 'require("./package.json").version')"
+          test "$(/bin/sh dist/check/server/launch.sh --version)" = "$version"
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            test "$(arch -x86_64 /bin/sh dist/check/server/launch.sh --version)" = "$version"
+          else
+            echo "::warning::Rosetta isn't installed on this runner; the x64 binary was not run"
+          fi

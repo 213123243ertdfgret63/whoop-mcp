@@ -4,7 +4,7 @@ import { type BrowserSetupOptions, type BrowserSetupResult, browserSetup } from 
 import { resolveClientCredentials } from "./credentials.ts";
 import { type LoginOptions, type LoginResult, login } from "./login.ts";
 import { toStored } from "./oauth.ts";
-import { writeTokens } from "./store.ts";
+import { withTokenLock, writeTokens } from "./store.ts";
 
 export type LoginStatus =
   | { state: "idle" }
@@ -27,11 +27,10 @@ export interface BackgroundLoginDeps {
 const defaults: BackgroundLoginDeps = {
   resolveCreds: async () => (await resolveClientCredentials()).creds,
   login,
-  save: ({ tokens }) => writeTokens(toStored(tokens)),
+  save: ({ tokens }) => withTokenLock(() => writeTokens(toStored(tokens))),
   setup: browserSetup,
   redirectUri: () => envValue(process.env.WHOOP_REDIRECT_URI) ?? DEFAULT_REDIRECT_URI,
-  // For headless use and tests: print the URL (whoop_login returns it) without opening a browser.
-  openBrowser: process.env.WHOOP_MCP_NO_BROWSER !== "1",
+  openBrowser: true,
   timeoutMs: 5 * 60_000,
 };
 
@@ -136,7 +135,7 @@ export class BackgroundLogin {
             onSetupUrl: announce,
             signal: controller.signal,
           })
-          .then(({ tokens }) => ({ tokens, callbackParams: {} }));
+          .then(({ tokens }) => ({ tokens }));
 
     const inFlight = flow
       .then(async (result) => {

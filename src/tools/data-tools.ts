@@ -64,8 +64,14 @@ interface RangeInput {
 
 export class InputError extends Error {}
 
+/** WHOOP has no data for the future; asking anyway would quietly return today's data under another date. */
+export function notInFuture(date: IsoDate, field = "date"): IsoDate {
+  if (date > todayLocal()) throw new InputError(`${field} (${date}) is in the future; today is ${todayLocal()}.`);
+  return date;
+}
+
 export function resolveRange(input: RangeInput, defaultDays: number): { from: IsoDate; to: IsoDate } {
-  const to = input.end_date ?? todayLocal();
+  const to = notInFuture(input.end_date ?? todayLocal(), "end_date");
   const from = input.start_date ?? addDays(to, -((input.days ?? defaultDays) - 1));
   if (from > to) throw new InputError(`start_date (${from}) must be on or before end_date (${to}).`);
   if (daysBetween(from, to) + 1 > MAX_DAYS) {
@@ -153,7 +159,7 @@ export function registerDataTools(server: McpServer, client: Getter): void {
       raw,
     },
     async ({ date, raw: wantRaw }) => {
-      const requested = date ?? todayLocal();
+      const requested = notInFuture(date ?? todayLocal());
       const { days, truncated, first_data_date } = await fetchDays(
         client,
         addDays(requested, -(30 + ROLLBACK_MARGIN_DAYS)),
@@ -383,7 +389,8 @@ export function registerDataTools(server: McpServer, client: Getter): void {
       const { days, truncated, first_data_date } = await fetchDays(client, from, to, {
         workouts: args.metric === "workouts" || args.metric === "workout_minutes",
       });
-      const t = trend(days.map(dayRow), args.metric);
+      // Dates after a still-running WHOOP day belong to it; they aren't missing.
+      const t = trend(days.slice(0, currentDayIndex(days) + 1).map(dayRow), args.metric);
       return {
         data: { from, to, ...t, data_quality: dataQuality(days, truncated, first_data_date) },
         summary: `${METRICS[args.metric].label} from ${from} to ${to}: mean ${"mean" in t ? t.mean : "n/a"}, slope ${t.slope_per_week ?? "n/a"} per week.`,
@@ -401,7 +408,7 @@ export function registerDataTools(server: McpServer, client: Getter): void {
       metrics: z.array(metric).optional().describe("Which metrics."),
     },
     async ({ date, days: n, metrics }) => {
-      const requested = date ?? todayLocal();
+      const requested = notInFuture(date ?? todayLocal());
       const { days, truncated, first_data_date } = await fetchDays(
         client,
         addDays(requested, -(n + ROLLBACK_MARGIN_DAYS)),
@@ -481,8 +488,10 @@ export function registerDataTools(server: McpServer, client: Getter): void {
     },
     async ({ days: n }) => {
       const to = todayLocal();
-      const from = addDays(to, -(Math.max(n, 28) - 1));
-      const { days, truncated, first_data_date } = await fetchDays(client, from, to);
+      // 28 completed days plus the current one, even when the WHOOP day still running started days ago.
+      const from = addDays(to, -(Math.max(n, 28) + ROLLBACK_MARGIN_DAYS));
+      const { days: fetched, truncated, first_data_date } = await fetchDays(client, from, to);
+      const days = fetched.slice(0, currentDayIndex(fetched) + 1);
       const rows = days.map(dayRow);
       const zones = { z0: 0, z1: 0, z2: 0, z3: 0, z4: 0, z5: 0 };
       for (const d of days.slice(-7)) {
@@ -503,9 +512,9 @@ export function registerDataTools(server: McpServer, client: Getter): void {
             workout_min: r.workout_min,
             in_progress: r.in_progress,
           })),
-          data_quality: dataQuality(days, truncated, first_data_date),
+          data_quality: dataQuality(days.slice(-Math.max(n, 28)), truncated, first_data_date),
         },
-        summary: `Training load up to ${to}.`,
+        summary: `Training load up to ${days.at(-1)?.date ?? to}.`,
       };
     },
   );

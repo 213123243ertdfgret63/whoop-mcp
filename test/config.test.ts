@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, configDir, DEFAULT_REDIRECT_URI, loadClientCredentials } from "../src/config.ts";
+import { configDir, DEFAULT_REDIRECT_URI, loadClientCredentials } from "../src/config.ts";
 
 describe("loadClientCredentials", () => {
   test("returns trimmed credentials with the default redirect URI", () => {
@@ -16,7 +16,7 @@ describe("loadClientCredentials", () => {
       WHOOP_CLIENT_SECRET: "secret",
       WHOOP_REDIRECT_URI: " http://127.0.0.1:9999/cb ",
     });
-    expect(creds.redirectUri).toBe("http://127.0.0.1:9999/cb");
+    expect(creds?.redirectUri).toBe("http://127.0.0.1:9999/cb");
   });
 
   test("falls back to the default redirect URI when the override is blank", () => {
@@ -25,42 +25,13 @@ describe("loadClientCredentials", () => {
       WHOOP_CLIENT_SECRET: "secret",
       WHOOP_REDIRECT_URI: " ",
     });
-    expect(creds.redirectUri).toBe(DEFAULT_REDIRECT_URI);
+    expect(creds?.redirectUri).toBe(DEFAULT_REDIRECT_URI);
   });
 
-  const missing: [label: string, env: Record<string, string>][] = [
-    ["both are missing", {}],
-    ["the client id is missing", { WHOOP_CLIENT_SECRET: "secret" }],
-    ["the client secret is missing", { WHOOP_CLIENT_ID: "id" }],
-    ["the client id is blank", { WHOOP_CLIENT_ID: "   ", WHOOP_CLIENT_SECRET: "secret" }],
-    ["the client secret is blank", { WHOOP_CLIENT_ID: "id", WHOOP_CLIENT_SECRET: "" }],
-  ];
-  for (const [label, env] of missing) {
-    test(`throws an actionable ConfigError when ${label}`, () => {
-      let caught: unknown;
-      try {
-        loadClientCredentials(env);
-      } catch (err) {
-        caught = err;
-      }
-      expect(caught).toBeInstanceOf(ConfigError);
-      const err = caught as ConfigError;
-      expect(err.name).toBe("ConfigError");
-      expect(err.message).toContain("WHOOP_CLIENT_ID");
-      expect(err.message).toContain("WHOOP_CLIENT_SECRET");
-      expect(err.message).toContain("https://developer-dashboard.whoop.com");
-    });
-  }
-
-  test("the error message never echoes a provided secret", () => {
-    let message = "";
-    try {
-      loadClientCredentials({ WHOOP_CLIENT_SECRET: "super-secret-value" });
-    } catch (err) {
-      message = (err as Error).message;
-    }
-    expect(message).not.toBe("");
-    expect(message).not.toContain("super-secret-value");
+  test("returns null when either value is missing or blank", () => {
+    expect(loadClientCredentials({})).toBeNull();
+    expect(loadClientCredentials({ WHOOP_CLIENT_ID: "id" })).toBeNull();
+    expect(loadClientCredentials({ WHOOP_CLIENT_ID: "   ", WHOOP_CLIENT_SECRET: "secret" })).toBeNull();
   });
 });
 

@@ -2,6 +2,7 @@
 
 ## v0.3.0 (2026-10-28)
 
+- **Breaking:** whoop-mcp now installs only as a Claude Desktop extension (`.mcpb`). `install.sh`, `uninstall.sh`, `whoop-mcp claude add/remove` and Claude Code support are gone. Remove a pre-0.3 `whoop` server first (see the README's Install section).
 - Ship as a Claude Desktop extension and log to a file (58e29df)
 - Explain what the server can do in the README (04348bb)
 

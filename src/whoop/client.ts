@@ -1,6 +1,6 @@
 import { resolveClientCredentials } from "../auth/credentials.ts";
 import { OAuthHttpError, refreshTokens, toStored } from "../auth/oauth.ts";
-import { readTokens, type StoredTokens, writeTokens } from "../auth/store.ts";
+import { readTokens, type StoredTokens, withTokenLock, writeTokens } from "../auth/store.ts";
 import { type ClientCredentials, WHOOP } from "../config.ts";
 import { errorFields, log } from "../log.ts";
 
@@ -52,13 +52,9 @@ export class WhoopApiError extends Error {
   }
 }
 
-export interface ResponseMeta {
-  traceId?: string;
-  /** Raw X-RateLimit-* headers; the format is parsed properly in M2. */
-  rateLimit: Record<string, string>;
-}
-
 const REFRESH_SKEW_MS = 60_000;
+/** WHOOP gets this long per request; a stalled one must not hang a tool call (Claude gives up at about 60s). */
+const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_RATE_LIMIT_RETRIES = 2;
 const MAX_RETRY_DELAY_MS = 30_000;
 
@@ -68,15 +64,14 @@ export function retryDelayMs(res: Response): number {
   return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, MAX_RETRY_DELAY_MS) : 2000;
 }
 
-/**
- * M0 client: bearer auth, refresh-before-expiry, and one 401 retry that first re-reads the
- * store (another process may already have rotated the token). A rejected refresh re-reads the store too.
- * Cross-process locking is M1.
- */
 const elapsed = (started: number) => Math.round(performance.now() - started);
 
+/**
+ * Bearer auth, refresh-before-expiry, and one 401 retry that first re-reads the token file (another process
+ * may already have rotated the token); a rejected refresh re-reads it too. There is no cross-process lock, so
+ * two processes refreshing at once rely on that re-read.
+ */
 export class WhoopClient {
-  lastMeta: ResponseMeta = { rateLimit: {} };
   /**
    * The last token-refresh failure in this process, tied to the refresh token it happened with, so a new login
    * (which stores a different refresh token) clears it everywhere without any extra bookkeeping.
@@ -116,22 +111,27 @@ export class WhoopClient {
     const started = performance.now();
     let res: Response;
     try {
-      res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+      res = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
     } catch (err) {
       log.warn("whoop request failed", { path: url.pathname, ms: elapsed(started), ...errorFields(err) });
+      if ((err as Error).name === "TimeoutError") {
+        throw new Error(`WHOOP didn't answer in time (${url.pathname}); try again in a moment.`);
+      }
       throw err;
     }
     const rateLimit: Record<string, string> = {};
     res.headers.forEach((value, key) => {
       if (key.toLowerCase().startsWith("x-ratelimit")) rateLimit[key.toLowerCase()] = value;
     });
-    this.lastMeta = { traceId: res.headers.get("x-whoop-trace-id") ?? undefined, rateLimit };
     // Path, status and timing only: the body is WHOOP data and the query holds only dates and paging.
     log.write(res.ok ? "info" : "warn", "whoop request", {
       path: url.pathname,
       status: res.status,
       ms: elapsed(started),
-      trace: this.lastMeta.traceId,
+      trace: res.headers.get("x-whoop-trace-id") ?? undefined,
       ...(log.enabled("debug") ? { query: url.search || undefined } : {}),
       ...(res.status === 429 ? { rate_limit: rateLimit } : {}),
     });
@@ -210,17 +210,20 @@ export class WhoopClient {
       throw new SessionExpiredError();
     }
     const next = toStored(resp, tokens);
-    // A logout or re-login while the request was in flight wins over this refresh.
-    const latest = await readTokens();
-    if (!latest) {
-      log.warn("logged out during the token refresh; discarding the new tokens");
-      throw new NotLoggedInError();
-    }
-    if (latest.refresh_token !== tokens.refresh_token) {
-      log.info("logged in again during the token refresh; keeping the new login");
-      return latest;
-    }
-    await writeTokens(next); // persist before use: the old refresh token is now dead
-    return next;
+    // A logout or re-login while the request was in flight wins over this refresh. The lock keeps a login
+    // saving in this process from landing between the check and the write.
+    return withTokenLock(async () => {
+      const latest = await readTokens();
+      if (!latest) {
+        log.warn("logged out during the token refresh; discarding the new tokens");
+        throw new NotLoggedInError();
+      }
+      if (latest.refresh_token !== tokens.refresh_token) {
+        log.info("logged in again during the token refresh; keeping the new login");
+        return latest;
+      }
+      await writeTokens(next); // persist before use: the old refresh token is now dead
+      return next;
+    });
   }
 }

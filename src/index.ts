@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { BackgroundLogin } from "./auth/background-login.ts";
-import { deleteStoredCredentials, readStoredCredentials, resolveClientCredentials } from "./auth/credentials.ts";
+import { deleteStoredCredentials, resolveClientCredentials } from "./auth/credentials.ts";
 import { deleteTokens, readTokens, tokenPath } from "./auth/store.ts";
 import { terminalIO } from "./cli/terminal.ts";
-import { VERSION } from "./config.ts";
+import { ConfigError, VERSION } from "./config.ts";
 import { errorFields, log } from "./log.ts";
 import { createServer } from "./server.ts";
 import { loginAndSave, runSetup } from "./setup.ts";
@@ -28,6 +28,25 @@ Usage: whoop-mcp <command>
   logout [--forget-app] Delete saved tokens (and, with --forget-app, the app credentials)
   version               Print the version`;
 
+/** How long shutdown waits for a token refresh to save: under the 2s Claude gives between EOF and SIGTERM. */
+const SHUTDOWN_GRACE_MS = 1500;
+
+/**
+ * One idempotent shutdown for every way the connection can end. It waits briefly for a token refresh to be
+ * saved (WHOOP has already spent the old refresh token) and for the login page to close, then exits. A second
+ * trigger, such as SIGTERM arriving during that wait, joins the first instead of cutting it short.
+ */
+function stopper(loginFlow: BackgroundLogin, client: WhoopClient): (reason: string) => void {
+  let stopping = false;
+  return (reason) => {
+    if (stopping) return;
+    stopping = true;
+    log.info("client disconnected", { reason });
+    setTimeout(() => process.exit(0), SHUTDOWN_GRACE_MS).unref();
+    void Promise.allSettled([loginFlow.cancel(), client.drain()]).then(() => process.exit(0));
+  };
+}
+
 async function main(): Promise<void> {
   switch (command) {
     case "serve":
@@ -46,29 +65,21 @@ async function main(): Promise<void> {
         process.exit(1);
       });
       process.on("unhandledRejection", (reason) => log.error("unhandled rejection", errorFields(reason)));
-      for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
-        process.once(signal, () => {
-          log.info("stopping", { signal });
-          process.exit(0);
-        });
-      }
       process.once("exit", (exitCode) => log.info("exited", { exit_code: exitCode }));
       {
         // One login flow and one API client per process, shared by whichever protocol-era instance serves the
         // connection, so token refreshes stay single-flight across instances.
         const loginFlow = new BackgroundLogin();
         const client = new WhoopClient();
-        serveStdio(() => createServer(client, loginFlow));
-        // When the client goes away mid-login, close the local login server so this process can exit and
-        // doesn't keep the callback port busy for the next session.
-        process.stdin.once("end", () => {
-          log.info("client disconnected (stdin closed)");
-          // Exit even if something (the login callback server, a timer, a keep-alive socket) holds the
-          // event loop: on Windows Desktop hard-kills the server, and stdin EOF is the only goodbye. First let
-          // a token refresh finish saving: WHOOP has already spent the old refresh token.
-          setTimeout(() => process.exit(0), 10_000).unref();
-          void Promise.allSettled([loginFlow.cancel(), client.drain()]).then(() => process.exit(0));
+        serveStdio(() => createServer(client, loginFlow), {
+          onerror: (err) => log.warn("transport error", errorFields(err)),
         });
+        const shutdown = stopper(loginFlow, client);
+        // However the connection ends, close the login page's server (port 8787) and exit: something (that
+        // server, a timer, a keep-alive socket) could otherwise keep this process alive after Claude is gone.
+        process.stdin.once("end", () => shutdown("stdin closed"));
+        process.stdin.once("close", () => shutdown("stdin closed"));
+        for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(signal, () => shutdown(signal));
       }
       return;
 
@@ -88,17 +99,18 @@ async function main(): Promise<void> {
       return;
 
     case "login": {
-      const { creds } = await resolveClientCredentials();
-      await loginAndSave(creds, print, { openBrowser: !flag("--no-browser") });
+      const resolved = await resolveClientCredentials().catch((err: unknown) => {
+        if (err instanceof ConfigError) throw new Error("No WHOOP app credentials yet: run `whoop-mcp setup` first.");
+        throw err;
+      });
+      await loginAndSave(resolved.creds, print, { openBrowser: !flag("--no-browser") });
       return;
     }
 
     case "status": {
-      const stored = await readStoredCredentials();
-      const fromEnv = Boolean(process.env.WHOOP_CLIENT_ID && process.env.WHOOP_CLIENT_SECRET);
-      print(
-        `App credentials: ${fromEnv ? "environment variables" : (stored?.source ?? "not set up (run `whoop-mcp setup`)")}`,
-      );
+      const source = (await resolveClientCredentials().catch(() => null))?.source;
+      const where = { env: "environment variables", keychain: "keychain", file: "file" } as const;
+      print(`App credentials: ${source ? where[source] : "not set up (run `whoop-mcp setup`)"}`);
       const tokens = await readTokens();
       if (!tokens) {
         print("Not logged in.");
@@ -114,7 +126,7 @@ async function main(): Promise<void> {
     }
 
     case "logout":
-      // Server-side revocation (DELETE /v2/user/access) arrives in M1.
+      // Local only: the grant itself is revoked in the WHOOP developer dashboard.
       await deleteTokens();
       print(`Deleted ${tokenPath()}.`);
       if (flag("--forget-app")) {

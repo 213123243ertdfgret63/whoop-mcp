@@ -11,9 +11,6 @@ import {
 } from "../src/auth/credentials.ts";
 import { ConfigError, DEFAULT_REDIRECT_URI } from "../src/config.ts";
 
-/** A literal, unexpanded `${user_config.<key>}` string, as an MCP server would see it if nothing filled it in. */
-const placeholder = (key: string) => `$\{user_config.${key}}`;
-
 const creds = { clientId: "id-1234", clientSecret: "secret value", redirectUri: "http://localhost:8787/callback" };
 const ENV_KEYS = ["WHOOP_MCP_HOME", "WHOOP_MCP_CREDENTIAL_STORE"] as const;
 
@@ -84,6 +81,25 @@ describe("keychain store", () => {
     expect(await saveCredentials(creds)).toBe("file");
     expect((await stat(credentialFilePath())).mode & 0o777).toBe(0o600);
     expect(await readStoredCredentials()).toEqual({ creds, source: "file" });
+  });
+
+  test("a failed keychain write removes the old keychain entry, so the new file credentials win", async () => {
+    await saveCredentials({ ...creds, clientId: "old-app" });
+    const set = spyOn(Bun.secrets, "set").mockImplementation(async () => {
+      throw new Error("denied");
+    });
+    try {
+      expect(await saveCredentials({ ...creds, clientId: "new-app" })).toBe("file");
+    } finally {
+      set.mockRestore();
+    }
+    expect((await readStoredCredentials())?.creds.clientId).toBe("new-app");
+  });
+
+  test("an unreadable credentials file counts as not set up", async () => {
+    process.env.WHOOP_MCP_CREDENTIAL_STORE = "file";
+    await writeFile(credentialFilePath(), "{oops", { mode: 0o600 });
+    expect(await readStoredCredentials()).toBeNull();
   });
 
   test("the keychain wins over a file when both exist", async () => {
@@ -164,24 +180,6 @@ describe("resolveClientCredentials", () => {
     const resolved = await resolveClientCredentials({ WHOOP_REDIRECT_URI: " http://127.0.0.1:9999/cb " });
     expect(resolved.creds.redirectUri).toBe("http://127.0.0.1:9999/cb");
     expect(resolved.creds.clientSecret).toBe(creds.clientSecret);
-  });
-
-  test("ignores unexpanded placeholders from a client config and uses stored credentials", async () => {
-    await saveCredentials(creds);
-    const resolved = await resolveClientCredentials({
-      WHOOP_CLIENT_ID: placeholder("client_id"),
-      WHOOP_CLIENT_SECRET: placeholder("client_secret"),
-      WHOOP_REDIRECT_URI: placeholder("redirect_uri"),
-    });
-    expect(resolved).toEqual({ creds, source: "keychain" });
-  });
-
-  test("placeholders alone count as not configured", async () => {
-    const err = await resolveClientCredentials({
-      WHOOP_CLIENT_ID: placeholder("client_id"),
-      WHOOP_CLIENT_SECRET: placeholder("client_secret"),
-    }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(ConfigError);
   });
 
   test("throws a ConfigError pointing at whoop_login when nothing is configured", async () => {

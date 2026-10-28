@@ -69,6 +69,8 @@ beforeEach(async () => {
   onApi = () => json({ ok: true });
   consoleSpy = spyOn(console, "error").mockImplementation(() => {});
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    // Like real fetch, an already-aborted signal (e.g. a timeout) fails the request.
+    if (init?.signal?.aborted) throw init.signal.reason;
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.href === WHOOP.tokenUrl) {
       const call: TokenCall = { body: new URLSearchParams(String(init?.body ?? "")) };
@@ -308,7 +310,7 @@ describe("WhoopClient.get", () => {
     };
     const c = client();
     const call = c.get("/v2/user/profile/basic");
-    await Bun.sleep(5);
+    while (tokenCalls.length === 0) await Bun.sleep(1);
     let drained = false;
     const draining = c.drain().then(() => {
       drained = true;
@@ -448,45 +450,43 @@ describe("WhoopClient errors and metadata", () => {
     expect(err.message).toBe(`WHOOP API 500 on /v2/cycle: ${"x".repeat(300)}`);
   });
 
-  test("lastMeta captures the trace id and x-ratelimit-* headers with lowercased names", async () => {
+  test("logs each request's path, status and trace id, and the rate-limit headers on a 429", async () => {
     await writeTokens(tokens());
+    let calls = 0;
     onApi = () =>
-      json(
-        {},
-        {
-          headers: {
-            "X-RateLimit-Limit": "100, 100;window=60",
-            "X-RateLimit-Remaining": "99",
-            "X-RateLimit-Reset": "42",
-            "X-Whoop-Trace-Id": "trace-meta",
-            "Content-Type": "application/json",
-          },
-        },
-      );
-    const c = client();
-    await c.get("/v2/user/profile/basic");
-    expect(c.lastMeta).toEqual({
-      traceId: "trace-meta",
-      rateLimit: {
-        "x-ratelimit-limit": "100, 100;window=60",
-        "x-ratelimit-remaining": "99",
-        "x-ratelimit-reset": "42",
-      },
-    });
+      calls++ === 0
+        ? json({}, { status: 429, headers: { "Retry-After": "0.01", "X-RateLimit-Remaining": "0" } })
+        : json({}, { headers: { "X-Whoop-Trace-Id": "trace-meta" } });
+    await client().get("/v2/user/profile/basic");
+    const lines = consoleSpy.mock.calls.map((c: unknown[]) => c.map(String).join(" "));
+    expect(
+      lines.some((l: string) =>
+        /whoop request path=\S*\/v2\/user\/profile\/basic status=429 .*"x-ratelimit-remaining":"0"/.test(l),
+      ),
+    ).toBe(true);
+    expect(
+      lines.some((l: string) =>
+        /whoop request path=\S*\/v2\/user\/profile\/basic status=200 .*trace=trace-meta/.test(l),
+      ),
+    ).toBe(true);
+    // Never the token.
+    expect(lines.join("\n")).not.toContain("access-1");
   });
 
-  test("lastMeta is reset on each response rather than accumulating stale headers", async () => {
+  test("a request WHOOP never answers fails with a clear message instead of hanging", async () => {
     await writeTokens(tokens());
-    let first = true;
-    onApi = () => {
-      const headers: Record<string, string> = first ? { "X-RateLimit-Remaining": "5", "X-Whoop-Trace-Id": "t1" } : {};
-      first = false;
-      return json({}, { headers });
-    };
-    const c = client();
-    await c.get("/v2/user/profile/basic");
-    await c.get("/v2/user/profile/basic");
-    expect(c.lastMeta).toEqual({ traceId: undefined, rateLimit: {} });
+    onApi = () => new Promise<Response>(() => {});
+    const timeout = spyOn(AbortSignal, "timeout").mockImplementation(() =>
+      AbortSignal.abort(new DOMException("t", "TimeoutError")),
+    );
+    try {
+      const err = await client()
+        .get("/v2/cycle")
+        .catch((e: unknown) => e);
+      expect((err as Error).message).toContain("didn't answer in time");
+    } finally {
+      timeout.mockRestore();
+    }
   });
 });
 

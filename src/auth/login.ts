@@ -1,19 +1,9 @@
 import { openUrl } from "../cli/terminal.ts";
 import type { ClientCredentials } from "../config.ts";
 import { log } from "../log.ts";
-import {
-  buildAuthorizeUrl,
-  type ClientAuthMethod,
-  exchangeCode,
-  pkcePair,
-  randomState,
-  type TokenResponse,
-} from "./oauth.ts";
+import { buildAuthorizeUrl, exchangeCode, randomState, type TokenResponse } from "./oauth.ts";
 
 export interface LoginOptions {
-  pkce?: boolean;
-  stateLength?: number;
-  auth?: ClientAuthMethod;
   openBrowser?: boolean;
   timeoutMs?: number;
   /** Called once the callback server is listening, with the URL the user must open. */
@@ -24,8 +14,6 @@ export interface LoginOptions {
 
 export interface LoginResult {
   tokens: TokenResponse;
-  /** Query params WHOOP sent to the callback (minus `code`), for M0 probing. */
-  callbackParams: Record<string, string>;
 }
 
 /** Headers for every page the local server returns: never cached, never framed, no referrer leaks. */
@@ -152,9 +140,8 @@ export function oauthCallback(state: string, successMessage: string) {
 /** Runs the authorization-code flow with a one-shot localhost callback server. */
 export async function login(creds: ClientCredentials, opts: LoginOptions = {}): Promise<LoginResult> {
   const redirect = parseRedirect(creds.redirectUri);
-  const state = randomState(opts.stateLength ?? 32);
-  const pkce = opts.pkce ? await pkcePair() : undefined;
-  const authorizeUrl = buildAuthorizeUrl({ creds, state, codeChallenge: pkce?.challenge });
+  const state = randomState();
+  const authorizeUrl = buildAuthorizeUrl({ creds, state });
 
   const callback = oauthCallback(state, "You can close this tab and return to Claude or your terminal.");
   const server = listenLocal(redirect, (req) => {
@@ -175,9 +162,8 @@ export async function login(creds: ClientCredentials, opts: LoginOptions = {}): 
   if (opts.openBrowser ?? true) openUrl(authorizeUrl);
 
   try {
-    const { code, params } = await callback.result;
-    const tokens = await exchangeCode(creds, code, { codeVerifier: pkce?.verifier, auth: opts.auth });
-    return { tokens, callbackParams: params };
+    const { code } = await callback.result;
+    return { tokens: await exchangeCode(creds, code) };
   } finally {
     clearTimeout(timeout);
     opts.signal?.removeEventListener("abort", onAbort);

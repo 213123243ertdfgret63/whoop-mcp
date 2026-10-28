@@ -206,17 +206,16 @@ Pushing the tag runs `.github/workflows/release.yml` on a macOS runner. It check
 
 ## Development
 
-| Command                                                 | What it does                                                                                                         |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `bun test`                                              | Test suite, including stdio smoke tests for both MCP protocol versions                                               |
-| `bun run typecheck`                                     | `tsc --noEmit`                                                                                                       |
-| `bun run lint` / `bun run format`                       | Runs Biome's checks / runs them and applies fixes                                                                    |
-| `bun run inspect`                                       | Opens MCP Inspector against the server                                                                               |
-| `bun run spec:update`                                   | Refreshes `openapi/whoop.yaml` from WHOOP's published spec (review with `git diff openapi/`)                         |
-| `bun run gen:types`                                     | Generates `src/whoop/openapi.d.ts` from `openapi/whoop.yaml`; runs automatically on `bun install`                    |
-| `bun run release <patch\|minor\|major>`                 | Cuts a release (see [Cutting a release](#cutting-a-release))                                                         |
-| `bun run build`                                         | Builds a single-file binary for this machine at `dist/whoop-mcp`                                                     |
-| `bun run build:mcpb [macos\|windows]`                   | Builds the Claude Desktop extension bundles in `dist/` (see [How the bundles are built](#how-the-bundles-are-built)) |
-| `bun scripts/m0-probe.ts <public\|login\|refresh\|api>` | The M0 verification probes (see `docs/verification.md`)                                                              |
+| Command                                 | What it does                                                                                                         |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `bun test`                              | Test suite, including stdio smoke tests for both MCP protocol versions                                               |
+| `bun run typecheck`                     | `tsc --noEmit`                                                                                                       |
+| `bun run lint` / `bun run format`       | Runs Biome's checks / runs them and applies fixes                                                                    |
+| `bun run inspect`                       | Opens MCP Inspector against the server                                                                               |
+| `bun run spec:update`                   | Refreshes `openapi/whoop.yaml` from WHOOP's published spec (review with `git diff openapi/`)                         |
+| `bun run gen:types`                     | Generates `src/whoop/openapi.d.ts` from `openapi/whoop.yaml`; runs automatically on `bun install`                    |
+| `bun run release <patch\|minor\|major>` | Cuts a release (see [Cutting a release](#cutting-a-release))                                                         |
+| `bun run build`                         | Builds a single-file binary for this machine at `dist/whoop-mcp`                                                     |
+| `bun run build:mcpb [macos\|windows]`   | Builds the Claude Desktop extension bundles in `dist/` (see [How the bundles are built](#how-the-bundles-are-built)) |
 - **CI** (`.github/workflows/ci.yml`) runs lint, typecheck, tests, a compiled-binary smoke test and the bundle build on Ubuntu for every push to `main` and every pull request. Trigger it manually to include macOS. The Bun version comes from `.bun-version`.
 - **Pre-commit hook:** a Husky hook runs Biome on staged files and applies formatting and safe fixes. Lint errors it can't fix block the commit.

@@ -3,7 +3,6 @@ import {
   buildAuthorizeUrl,
   exchangeCode,
   OAuthHttpError,
-  pkcePair,
   randomState,
   refreshTokens,
   type TokenResponse,
@@ -78,45 +77,11 @@ describe("buildAuthorizeUrl", () => {
     expect(url.searchParams.get("scope")).toBe("read:profile read:sleep");
   });
 
-  test("omits PKCE parameters when no code challenge is given", () => {
-    const url = new URL(buildAuthorizeUrl({ creds, state: "s" }));
-    expect(url.searchParams.has("code_challenge")).toBe(false);
-    expect(url.searchParams.has("code_challenge_method")).toBe(false);
-  });
-
-  test("adds the code challenge with method S256 when a challenge is given", () => {
-    const url = new URL(buildAuthorizeUrl({ creds, state: "s", codeChallenge: "abc_-123" }));
-    expect(url.searchParams.get("code_challenge")).toBe("abc_-123");
-    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
-  });
-
   test("never leaks the client secret into the authorize URL", () => {
-    const raw = buildAuthorizeUrl({ creds, state: "s", codeChallenge: "c" });
+    const raw = buildAuthorizeUrl({ creds, state: "s" });
     expect(raw).not.toContain(encodeURIComponent(creds.clientSecret));
     expect(decodeURIComponent(raw)).not.toContain(creds.clientSecret);
     expect(new URL(raw).searchParams.has("client_secret")).toBe(false);
-  });
-});
-
-describe("pkcePair", () => {
-  test("challenge is the base64url SHA-256 of the verifier", async () => {
-    const { verifier, challenge } = await pkcePair();
-    const expected = new Bun.CryptoHasher("sha256").update(verifier).digest("base64url");
-    expect(challenge).toBe(expected);
-    expect(challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
-  });
-
-  test("verifier is 43-128 unreserved characters as RFC 7636 requires", async () => {
-    const { verifier } = await pkcePair();
-    expect(verifier.length).toBeGreaterThanOrEqual(43);
-    expect(verifier.length).toBeLessThanOrEqual(128);
-    expect(verifier).toMatch(/^[A-Za-z0-9\-._~]+$/);
-  });
-
-  test("produces a different verifier each call", async () => {
-    const a = await pkcePair();
-    const b = await pkcePair();
-    expect(a.verifier).not.toBe(b.verifier);
   });
 });
 
@@ -150,65 +115,17 @@ describe("exchangeCode", () => {
     expect(resp.access_token).toBe("at");
   });
 
-  test("sends client credentials in the body by default and no Authorization header", async () => {
+  test("sends client credentials in the body and no Authorization header", async () => {
     await exchangeCode(creds, "c");
     const call = onlyCall();
     expect(call.body.get("client_id")).toBe(creds.clientId);
     expect(call.body.get("client_secret")).toBe(creds.clientSecret);
     expect(call.headers.has("authorization")).toBe(false);
   });
-
-  test("with basic auth, sends an HTTP Basic header and keeps the secret out of the body", async () => {
-    await exchangeCode(creds, "c", { auth: "basic" });
-    const call = onlyCall();
-    expect(call.body.has("client_secret")).toBe(false);
-    expect(call.body.has("client_id")).toBe(false);
-    const header = call.headers.get("authorization") ?? "";
-    expect(header.startsWith("Basic ")).toBe(true);
-    const decoded = atob(header.slice("Basic ".length));
-    const sep = decoded.indexOf(":");
-    // RFC 6749 §2.3.1: id and secret are form-encoded (space -> "+") before Basic encoding.
-    const formDecode = (v: string) => new URLSearchParams(`v=${v}`).get("v");
-    expect(formDecode(decoded.slice(0, sep))).toBe(creds.clientId);
-    expect(formDecode(decoded.slice(sep + 1))).toBe(creds.clientSecret);
-  });
-
-  test("with basic auth, form-encodes reserved characters in the credentials (space becomes +)", async () => {
-    await exchangeCode({ ...creds, clientId: "id with space", clientSecret: "s&c:r+t" }, "c", { auth: "basic" });
-    const decoded = atob((onlyCall().headers.get("authorization") ?? "").slice("Basic ".length));
-    expect(decoded).toBe("id+with+space:s%26c%3Ar%2Bt");
-  });
-
-  test("includes code_verifier only when one is given", async () => {
-    await exchangeCode(creds, "c");
-    await exchangeCode(creds, "c", { codeVerifier: "verifier-xyz" });
-    expect(calls[0]!.body.has("code_verifier")).toBe(false);
-    expect(calls[1]!.body.get("code_verifier")).toBe("verifier-xyz");
-  });
-});
-
-describe("public client (auth: none)", () => {
-  test("code exchange sends the client id and PKCE verifier but never the secret", async () => {
-    await exchangeCode(creds, "c", { auth: "none", codeVerifier: "v".repeat(43) });
-    const call = onlyCall();
-    expect(call.body.get("client_id")).toBe(creds.clientId);
-    expect(call.body.get("code_verifier")).toBe("v".repeat(43));
-    expect(call.body.has("client_secret")).toBe(false);
-    expect(call.headers.has("authorization")).toBe(false);
-    expect(call.body.toString()).not.toContain(encodeURIComponent(creds.clientSecret));
-  });
-
-  test("refresh sends the client id without the secret", async () => {
-    await refreshTokens(creds, "rt", { auth: "none" });
-    const call = onlyCall();
-    expect(call.body.get("client_id")).toBe(creds.clientId);
-    expect(call.body.has("client_secret")).toBe(false);
-    expect(call.headers.has("authorization")).toBe(false);
-  });
 });
 
 describe("refreshTokens", () => {
-  test("POSTs a refresh_token grant with scope=offline by default", async () => {
+  test("POSTs a refresh_token grant with scope=offline", async () => {
     await refreshTokens(creds, "old-rt");
     const call = onlyCall();
     expect(call.url).toBe(WHOOP.tokenUrl);
@@ -219,18 +136,6 @@ describe("refreshTokens", () => {
     expect(call.body.get("scope")).toBe("offline");
     expect(call.body.get("client_id")).toBe(creds.clientId);
     expect(call.body.get("client_secret")).toBe(creds.clientSecret);
-  });
-
-  test("omits scope when includeOfflineScope is false", async () => {
-    await refreshTokens(creds, "rt", { includeOfflineScope: false });
-    expect(onlyCall().body.has("scope")).toBe(false);
-  });
-
-  test("with basic auth, keeps the client secret out of the body", async () => {
-    await refreshTokens(creds, "rt", { auth: "basic" });
-    const call = onlyCall();
-    expect(call.body.has("client_secret")).toBe(false);
-    expect(call.headers.get("authorization")).toMatch(/^Basic /);
   });
 });
 

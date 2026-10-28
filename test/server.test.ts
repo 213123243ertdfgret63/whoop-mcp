@@ -316,7 +316,6 @@ describe("whoop_login", () => {
                 token_type: "bearer",
                 scope: "offline",
               },
-              callbackParams: {},
             });
         }),
     });
@@ -616,5 +615,40 @@ describe("tool-call logging", () => {
     expect(lines.some((l) => /WARN {2}tool whoop_daily_summaries error .*start_date/.test(l))).toBe(true);
     // Results are WHOOP data and never logged.
     expect(lines.join("\n")).not.toContain("Lovelace");
+  });
+});
+
+describe("dates and windows", () => {
+  test("future dates are refused instead of silently showing today", async () => {
+    const { client, stub } = await connect({});
+    const tomorrow = addDays(todayLocal(), 1);
+    for (const [name, args] of [
+      ["whoop_today", { date: tomorrow }],
+      ["whoop_daily_summaries", { end_date: tomorrow }],
+    ] as const) {
+      const result = await client.callTool({ name, arguments: args });
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain("in the future");
+    }
+    expect(stub.calls).toEqual([]);
+  });
+
+  test("training load counts full 7- and 28-day windows while yesterday's WHOOP day is still running", async () => {
+    const today = todayLocal();
+    const closed = Array.from({ length: 40 }, (_, i) => {
+      const d = addDays(today, -41 + i);
+      return cycle(i + 1, `${d}T00:00:00Z`, `${addDays(d, 1)}T00:00:00Z`);
+    });
+    const open = cycle(99, `${addDays(today, -1)}T00:00:00Z`, undefined);
+    const { client } = await connect({
+      "/v2/cycle": { records: [...closed, open] },
+      "/v2/recovery": { records: [] },
+      "/v2/activity/sleep": { records: [] },
+      "/v2/activity/workout": { records: [] },
+    });
+    const result = await client.callTool({ name: "whoop_training_load", arguments: {} });
+    expect(result.structuredContent).toMatchObject({ days_with_strain: { acute: 7, chronic: 28 } });
+    const daily = (result.structuredContent as { daily: { date: string }[] }).daily;
+    expect(daily.at(-1)?.date).toBe(addDays(today, -1));
   });
 });

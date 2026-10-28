@@ -1,3 +1,5 @@
+> **Archived.** This is the pre-build research brief from 2026-10-27. The design changed since (a Claude Desktop extension only, credentials entered on a setup page, no Claude Code or npm packaging), so read the README for how things work now. WHOOP API facts the code relies on are in [whoop-api-notes.md](../whoop-api-notes.md).
+
 # WHOOP MCP Server (Bun + TypeScript): Build Brief
 
 _Put together from the api, oauth, existing-servers and mcp-bun research reports, with the fact-check corrections applied. Research date: 2026-10-27. Anything marked **UNVERIFIED** still needs to be tested or confirmed._

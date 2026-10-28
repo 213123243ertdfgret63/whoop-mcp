@@ -13,8 +13,6 @@ import { join } from "node:path";
  */
 import { $ } from "bun";
 
-export type Bump = "patch" | "minor" | "major";
-
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 
 export function nextVersion(current: string, bump: string): string {

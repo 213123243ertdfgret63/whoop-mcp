@@ -8,10 +8,11 @@ import {
   envValue,
   loadClientCredentials,
 } from "../config.ts";
-import { readPrivateJson, writePrivateJson } from "./store.ts";
+import { log } from "../log.ts";
+import { readPrivateText, writePrivateJson } from "./store.ts";
 
 /**
- * Where the user's WHOOP developer-app credentials (client id + secret) live after `whoop-mcp setup`.
+ * Where the user's WHOOP developer-app credentials (client id + secret) live after setup.
  * The OS keychain is preferred; Bun.secrets is experimental and needs a secret service on Linux,
  * so a 0600 file in the config dir is the fallback. Env vars still override both.
  */
@@ -30,8 +31,15 @@ function keychainEnabled(env = process.env): boolean {
 
 function parse(raw: string | null): ClientCredentials | null {
   if (!raw) return null;
-  const c = JSON.parse(raw) as Partial<ClientCredentials>;
-  if (!c.clientId || !c.clientSecret) return null;
+  let c: Partial<ClientCredentials>;
+  try {
+    c = JSON.parse(raw) as Partial<ClientCredentials>;
+  } catch {
+    // Unreadable (hand-edited, truncated): treat as absent so whoop_login falls back to the setup page.
+    log.warn("ignoring unreadable stored WHOOP app credentials");
+    return null;
+  }
+  if (!c?.clientId || !c.clientSecret) return null;
   return { clientId: c.clientId, clientSecret: c.clientSecret, redirectUri: c.redirectUri || DEFAULT_REDIRECT_URI };
 }
 
@@ -44,8 +52,7 @@ export async function readStoredCredentials(): Promise<{ creds: ClientCredential
       // No usable keychain (e.g. no secret service daemon); fall through to the file store.
     }
   }
-  const fromFile = await readPrivateJson<ClientCredentials>(credentialFilePath());
-  const creds = parse(fromFile && JSON.stringify(fromFile));
+  const creds = parse(await readPrivateText(credentialFilePath()));
   return creds ? { creds, source: "file" } : null;
 }
 
@@ -58,7 +65,13 @@ export async function saveCredentials(creds: ClientCredentials): Promise<Credent
       await rm(credentialFilePath(), { force: true });
       return "keychain";
     } catch {
-      // Fall back to the file store below.
+      // Fall back to the file store below. An older keychain entry would win over the file on the next read,
+      // so remove it (best effort) rather than silently keep using the old app.
+      try {
+        await Bun.secrets.delete(KEYCHAIN);
+      } catch {
+        // No usable keychain, so nothing there to win over the file either.
+      }
     }
   }
   await writePrivateJson(credentialFilePath(), creds);
@@ -83,13 +96,12 @@ export async function deleteStoredCredentials(): Promise<boolean> {
   return removed;
 }
 
-/** Env vars win (handy for CI and one-off overrides), then whatever `whoop-mcp setup` stored. */
+/** Env vars win (handy for development), then whatever setup stored. */
 export async function resolveClientCredentials(
   env = process.env,
 ): Promise<{ creds: ClientCredentials; source: CredentialSource }> {
-  if (envValue(env.WHOOP_CLIENT_ID) && envValue(env.WHOOP_CLIENT_SECRET)) {
-    return { creds: loadClientCredentials(env), source: "env" };
-  }
+  const fromEnv = loadClientCredentials(env);
+  if (fromEnv) return { creds: fromEnv, source: "env" };
   const stored = await readStoredCredentials();
   if (stored) {
     // A redirect override still applies to stored credentials.

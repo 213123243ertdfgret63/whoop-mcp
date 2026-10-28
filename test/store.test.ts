@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deleteTokens, readTokens, type StoredTokens, tokenPath, writeTokens } from "../src/auth/store.ts";
+import {
+  deleteTokens,
+  readTokens,
+  type StoredTokens,
+  tokenPath,
+  withTokenLock,
+  writeTokens,
+} from "../src/auth/store.ts";
 
 const ENV_KEYS = ["WHOOP_MCP_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"] as const;
 let savedEnv: Record<string, string | undefined>;
@@ -97,9 +104,29 @@ describe("token store", () => {
     expect(await readTokens()).toBeNull();
   });
 
-  test("a corrupt token file makes readTokens throw rather than silently log the user out", async () => {
+  test("a corrupt token file counts as logged out, so whoop_login can replace it", async () => {
     await writeTokens(sample);
     await writeFile(tokenPath(), "{not json", { mode: 0o600 });
-    await expect(readTokens()).rejects.toThrow(SyntaxError);
+    expect(await readTokens()).toBeNull();
+  });
+
+  test("concurrent writes in one process don't share a temp file", async () => {
+    await Promise.all(Array.from({ length: 20 }, (_, i) => writeTokens({ ...sample, access_token: `a${i}` })));
+    expect((await readTokens())?.access_token).toMatch(/^a\d+$/);
+  });
+
+  test("withTokenLock runs token updates one at a time", async () => {
+    const order: string[] = [];
+    await Promise.all([
+      withTokenLock(async () => {
+        order.push("a:start");
+        await Bun.sleep(10);
+        order.push("a:end");
+      }),
+      withTokenLock(async () => {
+        order.push("b:start");
+      }),
+    ]);
+    expect(order).toEqual(["a:start", "a:end", "b:start"]);
   });
 });

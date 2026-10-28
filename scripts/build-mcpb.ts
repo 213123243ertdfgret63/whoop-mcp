@@ -174,6 +174,7 @@ async function build(bundle: Bundle, tools: { name: string; description: string 
   await rm(out, { force: true });
   await $`${mcpbCli} pack ${stage} ${out}`.quiet();
   if (executables.length) await checkExecutable(out, executables);
+  await rm(stage, { recursive: true, force: true }); // ~300 MB of unpacked binaries, no longer needed
   return out;
 }
 

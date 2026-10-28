@@ -18,7 +18,6 @@ const RESULT: LoginResult = {
     token_type: "bearer",
     scope: "offline read:sleep",
   },
-  callbackParams: {},
 };
 
 /** A fake browser login the test drives by hand: announce the URL, then approve or fail. */

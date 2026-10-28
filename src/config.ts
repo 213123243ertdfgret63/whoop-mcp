@@ -9,8 +9,6 @@ export const WHOOP = {
   apiBase: "https://api.prod.whoop.com/developer",
   authorizeUrl: "https://api.prod.whoop.com/oauth/oauth2/auth",
   tokenUrl: "https://api.prod.whoop.com/oauth/oauth2/token",
-  revokeUrl: "https://api.prod.whoop.com/oauth/oauth2/revoke",
-  discoveryUrl: "https://api.prod.whoop.com/oauth/.well-known/openid-configuration",
   openapiUrl: "https://api.prod.whoop.com/developer/doc/openapi.json",
 } as const;
 
@@ -37,24 +35,19 @@ export class ConfigError extends Error {
   override name = "ConfigError";
 }
 
-/**
- * A trimmed env value, or undefined when blank or an unexpanded `${...}` placeholder (e.g. a client config's
- * `${user_config.client_id}` that was never filled in), so it can't masquerade as a real credential.
- */
+/** A trimmed env value, or undefined when unset or blank. */
 export function envValue(value: string | undefined): string | undefined {
-  const v = value?.trim();
-  return v && !/^\$\{[^}]*\}$/.test(v) ? v : undefined;
+  return value?.trim() || undefined;
 }
 
-/** Each user brings their own WHOOP developer app (ToU §3.2.1: no developer credentials in source). */
-export function loadClientCredentials(env = process.env): ClientCredentials {
+/**
+ * App credentials from WHOOP_CLIENT_ID / WHOOP_CLIENT_SECRET (for development), or null when either is missing.
+ * Each user brings their own WHOOP developer app (ToU §3.2.1: no developer credentials in source).
+ */
+export function loadClientCredentials(env = process.env): ClientCredentials | null {
   const clientId = envValue(env.WHOOP_CLIENT_ID);
   const clientSecret = envValue(env.WHOOP_CLIENT_SECRET);
-  if (!clientId || !clientSecret) {
-    throw new ConfigError(
-      "WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET must be set (create an app at https://developer-dashboard.whoop.com).",
-    );
-  }
+  if (!clientId || !clientSecret) return null;
   return { clientId, clientSecret, redirectUri: envValue(env.WHOOP_REDIRECT_URI) ?? DEFAULT_REDIRECT_URI };
 }
 
