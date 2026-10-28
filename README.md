@@ -2,9 +2,55 @@
 
 An [MCP](https://modelcontextprotocol.io) server that gives Claude your [WHOOP](https://www.whoop.com) data: recovery, sleep, strain, workouts and profile. It uses WHOOP's official Developer API (v2) through your own free WHOOP developer app, reads data only, and runs locally on your computer.
 
-> Status: early. The tools so far are `whoop_status`, `whoop_login` and `whoop_profile`. See [RESEARCH.md](RESEARCH.md) for the plan.
-
 Not affiliated with or endorsed by WHOOP. Nothing it returns is medical advice.
+
+## What it can do
+
+Once it's connected, you talk to Claude normally and it fetches whatever WHOOP data the question needs. You don't call tools yourself.
+
+**Daily check-in**
+
+- "How am I today? Should I train hard or keep it easy?"
+  Claude gets last night's sleep, this morning's recovery (green, yellow or red), the day's strain, steps and calories so far, and today's workouts, and compares each number with your own last 30 days.
+- After midnight, or after a night without the strap, it shows the WHOOP day that's still running rather than an empty day.
+- While WHOOP is still learning you (the first few weeks), it says the recovery score is provisional. When there's too little history for a fair comparison, it says that too.
+
+**Weekly review**
+
+- "How was my week?" "Compare this week with last week." "Did my sleep get better this month?"
+- You get a row per day for up to 90 days, with averages, and side-by-side comparisons of any two periods with the change between them.
+
+**Sleep**
+
+- "Why am I tired?" "Is my bedtime consistent?" "How much deep sleep am I getting?"
+- Every sleep and nap: bed and wake times, light, deep and REM sleep, time awake, disturbances, how much sleep WHOOP thinks you needed and why, efficiency and consistency.
+
+**Training and load**
+
+- "Am I overdoing it?" "Is it time for an easier week?"
+- Acute (7-day) vs. chronic (28-day) strain and their ratio, average recovery, nightly sleep shortfall, and minutes in each heart-rate zone.
+- Every workout with duration, strain, heart rate, calories, distance and zone minutes, filterable by sport (e.g. walking).
+- Zones are explained the way WHOOP defines them, as % of heart-rate reserve, so Claude doesn't turn them into the wrong bpm targets.
+
+**Patterns**
+
+- "Is my HRV trending down?" "What's normal for me?" "Does a hard day hurt my next night's sleep?"
+- Trends with a weekly slope and a 7-day rolling average, your personal normal range for each metric, and correlations between two metrics, including a day apart (e.g. strain vs. next-day recovery).
+
+**Honest about the data**
+
+- Every answer comes with a `data_quality` section. It lists:
+  - days with no data;
+  - scores still being processed, or that WHOOP couldn't score;
+  - whether you're still calibrating;
+  - which empty days are simply from before your account existed, so Claude doesn't mistake them for days you didn't wear the strap.
+
+### What it can't do (yet)
+
+- **Remember anything between chats.** It has no goals, injuries, training plan or daily log of its own. You can keep these in a Claude Project or a notes file for now. A local planning store (goals, weekly plan, daily check-ins) is the next release.
+- **Write to WHOOP.** It reads data only. WHOOP's API has no Journal, Stress Monitor, Strength Trainer sets or live heart rate, so Claude can't see those.
+- **Give medical advice.** It's a planning and logging aid. For symptoms, injuries or anything clinical, see a professional.
+- **Run on its own schedule, or on your phone.** It runs on your computer while Claude is open there. You can schedule a morning check-in with Claude Desktop's scheduled tasks, but your computer has to be awake.
 
 ## Install
 
@@ -52,6 +98,7 @@ Ask Claude to **"connect WHOOP"**. It calls the `whoop_login` tool, which opens 
    | Webhooks       | leave empty                                                                    |
 
    It then asks for the app's Client ID and Client Secret. It checks them with WHOOP (if WHOOP can't be reached, it saves them anyway) and saves them to your system keychain.
+
 2. **Then:** it continues to WHOOP's consent screen. Approve access, tell Claude you're done, and it confirms with `whoop_status`.
 
 After that, `whoop_login` goes straight to WHOOP's consent screen. If WHOOP shows an error (for example about the redirect URI or an unknown client), ask Claude to "set up WHOOP again" to enter different credentials. That calls `whoop_login` with `reconfigure: true`.
@@ -96,14 +143,14 @@ Ask Claude things like "how am I today, should I train hard?", "how was my week?
 | `whoop_trends`          | How one metric moved over N days: statistics, slope per week, 7-day rolling average, and where the latest value sits.                                                                   |
 | `whoop_baselines`       | Your personal normal range per metric, and how a given day compares (z-score, percentile).                                                                                              |
 | `whoop_compare_periods` | Averages for two date ranges side by side, with the change (e.g. this week vs. last week).                                                                                              |
-| `whoop_training_load`   | Acute (7-day) vs. chronic (28-day) strain and their ratio, 7-day sleep debt, average recovery and minutes per heart-rate zone.                                                          |
+| `whoop_training_load`   | Acute (7-day) vs. chronic (28-day) strain and their ratio, average nightly sleep shortfall, average recovery and minutes per heart-rate zone.                                           |
 | `whoop_correlate`       | Correlation between two metrics, optionally a few days apart (e.g. strain vs. next-day recovery).                                                                                       |
 | `whoop_get_record`      | One cycle, sleep, workout or recovery by ID, with the raw WHOOP record.                                                                                                                 |
 | `whoop_profile`         | Your name, height, weight and max heart rate.                                                                                                                                           |
 | `whoop_status`          | Connection state: app credentials, login progress, granted scopes, token expiry and server version. Makes no WHOOP API calls.                                                           |
 | `whoop_login`           | Connects your account in the browser (setup page first if needed). `reconfigure: true` re-enters the app credentials.                                                                   |
 
-Dates are your local dates, and a WHOOP day runs from falling asleep the night before. Results include a `data_quality` section that says which days are missing, still being scored or calibrating. Nothing here is medical advice.
+Dates are your local dates, and a WHOOP day runs from sleep to sleep, not midnight to midnight. Results include a `data_quality` section that says which days are missing, still being scored or calibrating. Ranges are limited to 90 days, and `raw: true` (the original WHOOP records) to 7. Nothing here is medical advice.
 
 ## Run from source
 
