@@ -11,7 +11,8 @@ export function errorResult(err: unknown) {
 
 export function jsonResult<T extends Record<string, unknown>>(data: T, summary: string) {
   return {
-    content: [{ type: "text" as const, text: `${summary}\n\n${JSON.stringify(data, null, 2)}` }],
+    // Compact JSON: indentation adds about half again to every result, and structuredContent carries the object.
+    content: [{ type: "text" as const, text: `${summary}\n\n${JSON.stringify(data)}` }],
     structuredContent: data,
   };
 }

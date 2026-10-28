@@ -34,8 +34,11 @@ export async function verifyCredentials(creds: ClientCredentials): Promise<Verif
   }
   const body = (await res.json().catch(() => ({}))) as { error?: string; error_description?: string };
   if (body.error === "invalid_client") return { ok: false, reason: "WHOOP rejected the client ID or secret." };
-  if (res.status >= 500) return { ok: "unknown", reason: `WHOOP returned ${res.status}` };
-  return { ok: true };
+  // The fake refresh token must be refused as a bad grant; only that proves the client itself was accepted.
+  // A firewall 403, a 429 or an HTML error page says nothing about the credentials.
+  if (body.error === "invalid_grant" || body.error === "unsupported_grant_type" || body.error === "invalid_request")
+    return { ok: true };
+  return { ok: "unknown", reason: `WHOOP returned ${res.status}${body.error ? ` (${body.error})` : ""}` };
 }
 
 /** Browser login with the given app credentials; saves the tokens and reports missing scopes. */

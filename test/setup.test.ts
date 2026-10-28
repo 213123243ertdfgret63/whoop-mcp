@@ -235,8 +235,15 @@ describe("verifyCredentials", () => {
     expect((result as { reason: string }).reason).toContain("ECONNREFUSED");
   });
 
-  test("a non-JSON error body does not crash verification", async () => {
+  test("a non-JSON error body does not crash verification and proves nothing", async () => {
     respond(() => new Response("<html>bad gateway</html>", { status: 400 }));
-    expect((await verifyCredentials(creds)).ok).toBe(true);
+    expect((await verifyCredentials(creds)).ok).toBe("unknown");
+  });
+
+  test("a firewall 403 or a 429 is unknown, not verified", async () => {
+    respond(() => json(403, { message: "Forbidden" }));
+    expect((await verifyCredentials(creds)).ok).toBe("unknown");
+    respond(() => json(429, {}));
+    expect((await verifyCredentials(creds)).ok).toBe("unknown");
   });
 });

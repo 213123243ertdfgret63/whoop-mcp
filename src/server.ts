@@ -9,12 +9,14 @@ import { registerDataTools } from "./tools/data-tools.ts";
 import { WhoopClient } from "./whoop/client.ts";
 
 const INSTRUCTIONS = `WHOOP data for the user's own account: recovery, HRV, resting heart rate, sleep, strain, steps and workouts.
-Useful for acting as the user's personal trainer or coach:
+Useful for planning and reviewing the user's training:
 - "How am I today?", readiness, whether to train hard: whoop_today.
 - Weekly check-ins and patterns: whoop_daily_summaries, whoop_compare_periods.
 - Programming, deloads, overreaching: whoop_training_load (acute:chronic strain), whoop_trends, whoop_baselines.
-- Sleep coaching: whoop_sleep. Training history: whoop_workouts. What drives what: whoop_correlate.
-Judge numbers against the user's own baselines (whoop_baselines, or vs_last_30_days in whoop_today) rather than population norms, and say when data is missing, pending or calibrating. Dates are the user's local dates; a day runs from falling asleep the night before. This is not medical advice: suggest a professional for symptoms, injuries or anything clinical.
+- Sleep: whoop_sleep. Training history: whoop_workouts. What drives what: whoop_correlate.
+Judge numbers against the user's own baselines (whoop_baselines, or vs_last_30_days in whoop_today) rather than population norms, and say when data is missing, pending or calibrating. A baseline needs 7+ days (baseline_days); with fewer, say it is still forming. Dates before data_quality.first_data_date have no WHOOP data at all (usually the account is newer than the range), so don't read them as missed wear or rest days. Dates are the user's local dates; a WHOOP day runs from sleep to sleep, not midnight to midnight.
+WHOOP heart-rate zones are % of heart-rate reserve (resting HR + pct x (max HR - resting HR)), not % of max HR.
+Present suggestions as options for the user to choose. This is not medical advice: suggest a professional for symptoms, injuries or anything clinical.
 If a tool says the user is not logged in, call whoop_login.`;
 
 /** Where the WHOOP app credentials come from, or "missing" (never throws). */
@@ -40,6 +42,8 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
         "Check whether the WHOOP account is connected: app credentials, login state (including a browser login started with whoop_login), granted scopes and token expiry. Makes no WHOOP API calls. Use this first if other whoop_ tools fail.",
       outputSchema: z.object({
         logged_in: z.boolean(),
+        session_expired: z.boolean(),
+        last_error: z.string().nullable(),
         app_credentials: z.enum(["env", "keychain", "file", "missing"]),
         login: z.object({
           state: z.enum(["idle", "pending", "succeeded", "failed"]),
@@ -61,8 +65,15 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
       const scopes = tokens?.scope?.split(/\s+/).filter(Boolean) ?? [];
       const login = loginFlow.status;
       const app_credentials = await credentialSource();
+      // Optional call: tests pass a stub client without it.
+      const { session_expired, last_error } = client.authProblem?.(tokens) ?? {
+        session_expired: false,
+        last_error: null,
+      };
       const data = {
-        logged_in: tokens !== null,
+        logged_in: tokens !== null && !session_expired,
+        session_expired,
+        last_error,
         app_credentials,
         login: {
           state: login.state,
@@ -81,15 +92,21 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
           ? login.kind === "setup"
             ? `Waiting for the user to finish the setup page in the browser (enter the WHOOP app's Client ID and Secret, then approve access): ${login.authorizeUrl}`
             : `Waiting for the user to approve access in the browser: ${login.authorizeUrl}`
-          : data.logged_in
-            ? app_credentials === "missing"
-              ? "Logged in, but the WHOOP app credentials are gone, so the next token refresh will fail. Call whoop_login with reconfigure: true to enter them again."
-              : "WHOOP is connected."
-            : login.state === "failed"
-              ? `The last login failed (${login.error}). Call whoop_login to try again, or with reconfigure: true to enter different WHOOP app credentials.`
-              : app_credentials === "missing"
-                ? "No WHOOP app credentials yet: call whoop_login, which opens a setup page in the browser to enter them (or run `whoop-mcp setup` in a terminal, or set WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET)."
-                : "Not logged in: call whoop_login to sign in with the browser (or run `whoop-mcp login` in a terminal).";
+          : session_expired
+            ? "The WHOOP session has expired or was revoked. Call whoop_login to reconnect."
+            : data.logged_in
+              ? app_credentials === "missing"
+                ? "Logged in, but the WHOOP app credentials are gone, so the next token refresh will fail. Call whoop_login with reconfigure: true to enter them again."
+                : data.last_error
+                  ? `Logged in, but the last token refresh failed: ${data.last_error}`
+                  : data.missing_scopes.length
+                    ? `Connected, but without ${data.missing_scopes.join(", ")}, so some tools will fail. Call whoop_login and approve every permission.`
+                    : "WHOOP is connected."
+              : login.state === "failed"
+                ? `The last login failed (${login.error}). Call whoop_login to try again, or with reconfigure: true to enter different WHOOP app credentials.`
+                : app_credentials === "missing"
+                  ? "No WHOOP app credentials yet: call whoop_login, which opens a setup page in the browser to enter them (or run `whoop-mcp setup` in a terminal, or set WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET)."
+                  : "Not logged in: call whoop_login to sign in with the browser (or run `whoop-mcp login` in a terminal).";
       return jsonResult(data, summary);
     },
   );

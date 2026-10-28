@@ -36,9 +36,10 @@ export function value(row: DayRow, metric: Metric): number | null {
  * Rows that count for statistics: drops the in-progress day for whole-day totals (strain, kcal, steps,
  * workouts), which would otherwise read as an unusually low day.
  */
+export const PARTIAL_METRICS: readonly Metric[] = ["strain", "kcal", "avg_hr", "steps", "workout_minutes", "workouts"];
+
 export function complete(rows: DayRow[], metric: Metric): DayRow[] {
-  const partial: Metric[] = ["strain", "kcal", "avg_hr", "steps", "workout_minutes", "workouts"];
-  return partial.includes(metric) ? rows.filter((r) => !r.in_progress) : rows;
+  return PARTIAL_METRICS.includes(metric) ? rows.filter((r) => !r.in_progress) : rows;
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -116,6 +117,18 @@ export function baseline(history: DayRow[], today: DayRow | undefined, metric: M
   });
   const s = stats(values);
   const t = today ? value(today, metric) : null;
+  if (today?.in_progress && PARTIAL_METRICS.includes(metric)) {
+    return {
+      metric,
+      description: METRICS[metric].label,
+      ...s,
+      today: null,
+      today_so_far: t,
+      z_score: null,
+      today_percentile: null,
+      note: "Day in progress; whole-day totals are not comparable yet.",
+    };
+  }
   const enough = s.n >= 7;
   return {
     metric,
@@ -227,9 +240,9 @@ export function trainingLoad(rows: DayRow[]) {
   const enough = last(28).length >= MIN_CHRONIC_DAYS;
   const ratio = enough && acute !== null && chronic ? r2(acute / chronic) : null;
   const lastWeek = rows.slice(-7);
-  const debt = lastWeek.reduce(
-    (sum, r) => (r.sleep_h !== null && r.sleep_needed_h !== null ? sum + (r.sleep_needed_h - r.sleep_h) : sum),
-    0,
+  // WHOOP's "sleep needed" already carries the previous nights' debt, so nightly shortfalls must not be summed.
+  const shortfall = mean(
+    lastWeek.map((r) => (r.sleep_h !== null && r.sleep_needed_h !== null ? r.sleep_needed_h - r.sleep_h : null)),
   );
   return {
     acute_strain_7d: acute,
@@ -239,13 +252,15 @@ export function trainingLoad(rows: DayRow[]) {
       ratio === null
         ? null
         : ratio < 0.8
-          ? "below usual (detraining)"
+          ? "below usual (lighter than your recent norm: a planned deload, illness/rest, or less training)"
           : ratio <= 1.3
             ? "usual range"
             : "above usual (ramping up)",
     days_with_strain: { acute: last(7).length, chronic: last(28).length },
     ...(enough ? {} : { note: `The ratio needs at least ${MIN_CHRONIC_DAYS} of the last 28 days with strain data.` }),
-    sleep_debt_7d_h: r2(debt),
+    sleep_shortfall_7d_avg_h: shortfall,
+    sleep_shortfall_note:
+      "Average nightly gap between sleep needed and sleep got. Sleep needed already includes carried-over debt, so these gaps don't add up to a total.",
     recovery_7d_avg: mean(lastWeek.map((r) => r.recovery_pct)),
   };
 }

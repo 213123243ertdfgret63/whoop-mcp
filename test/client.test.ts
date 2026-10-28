@@ -3,9 +3,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OAuthHttpError } from "../src/auth/oauth.ts";
-import { readTokens, type StoredTokens, writeTokens } from "../src/auth/store.ts";
+import { deleteTokens, readTokens, type StoredTokens, writeTokens } from "../src/auth/store.ts";
 import { type ClientCredentials, WHOOP } from "../src/config.ts";
-import { NotLoggedInError, retryDelayMs, WhoopApiError, WhoopClient } from "../src/whoop/client.ts";
+import {
+  CredentialsRejectedError,
+  NotLoggedInError,
+  retryDelayMs,
+  SessionExpiredError,
+  WhoopApiError,
+  WhoopClient,
+} from "../src/whoop/client.ts";
 
 const CREDS: ClientCredentials = {
   clientId: "test-client-id",
@@ -153,19 +160,115 @@ describe("WhoopClient.get", () => {
     expect(stored?.scope).toBe("offline read:profile");
   });
 
-  test("surfaces a refresh failure as an error and leaves the stored tokens untouched", async () => {
+  test("a server error on refresh surfaces as an error and leaves the stored tokens untouched", async () => {
     const original = tokens({ expires_at: Date.now() - 1000 });
     await writeTokens(original);
-    onToken = () => new Response('{"error":"invalid_grant"}', { status: 400 });
+    onToken = () => new Response("boom", { status: 500 });
 
     const err = await client()
       .get("/v2/user/profile/basic")
       .catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(OAuthHttpError);
-    expect((err as OAuthHttpError).status).toBe(400);
+    expect((err as OAuthHttpError).status).toBe(500);
     expect(apiCalls).toHaveLength(0);
     expect(await readTokens()).toEqual(original);
+  });
+
+  test("invalid_grant reports an expired session, leaves the file alone and stops posting the dead token", async () => {
+    const original = tokens({ expires_at: Date.now() - 1000 });
+    await writeTokens(original);
+    onToken = () => new Response('{"error":"invalid_grant"}', { status: 400 });
+    const c = client();
+
+    const err = await c.get("/v2/user/profile/basic").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SessionExpiredError);
+    expect(err).toBeInstanceOf(NotLoggedInError);
+    expect((err as Error).message).toContain("whoop_login");
+    // Writing a marker could clobber tokens another process is saving, so the file is untouched.
+    expect(await readTokens()).toEqual(original);
+    expect(c.authProblem(original)).toEqual({ session_expired: true, last_error: (err as Error).message });
+
+    // The same process fails fast without another token request.
+    await expect(c.get("/v2/user/profile/basic")).rejects.toBeInstanceOf(SessionExpiredError);
+    expect(tokenCalls).toHaveLength(1);
+    expect(apiCalls).toHaveLength(0);
+  });
+
+  test("a new login (a different refresh token) clears the expired state", async () => {
+    await writeTokens(tokens({ expires_at: Date.now() - 1000 }));
+    onToken = () => new Response('{"error":"invalid_grant"}', { status: 400 });
+    const c = client();
+    await expect(c.get("/v2/user/profile/basic")).rejects.toBeInstanceOf(SessionExpiredError);
+
+    const fresh = tokens({ access_token: "access-new", refresh_token: "refresh-new" });
+    await writeTokens(fresh);
+    expect(c.authProblem(fresh)).toEqual({ session_expired: false, last_error: null });
+    await c.get("/v2/user/profile/basic");
+    expect(apiCalls.at(-1)?.authorization).toBe("Bearer access-new");
+  });
+
+  test("a failed refresh is reported until a later refresh succeeds", async () => {
+    const stale = tokens({ expires_at: Date.now() - 1000 });
+    await writeTokens(stale);
+    let fail = true;
+    onToken = () =>
+      fail
+        ? new Response("boom", { status: 500 })
+        : json({ access_token: "access-2", refresh_token: "refresh-2", expires_in: 3600, token_type: "bearer" });
+    const c = client();
+    await expect(c.get("/v2/user/profile/basic")).rejects.toBeInstanceOf(OAuthHttpError);
+    expect(c.authProblem(stale)).toMatchObject({ session_expired: false, last_error: expect.stringContaining("500") });
+    fail = false;
+    await c.get("/v2/user/profile/basic");
+    expect(c.authProblem(await readTokens())).toEqual({ session_expired: false, last_error: null });
+  });
+
+  test("invalid_grant after another process already rotated the token uses the stored tokens", async () => {
+    await writeTokens(tokens({ expires_at: Date.now() - 1000 }));
+    onToken = async () => {
+      // The other process won the race and wrote its new tokens before our request was rejected.
+      await writeTokens(tokens({ access_token: "access-other", refresh_token: "refresh-other" }));
+      return new Response('{"error":"invalid_grant"}', { status: 400 });
+    };
+    await client().get("/v2/user/profile/basic");
+    expect(apiCalls.at(-1)?.authorization).toBe("Bearer access-other");
+  });
+
+  for (const code of ["invalid_client", "unauthorized_client"]) {
+    test(`${code} points to reconfiguring the app credentials and keeps the tokens`, async () => {
+      const original = tokens({ expires_at: Date.now() - 1000 });
+      await writeTokens(original);
+      onToken = () => new Response(JSON.stringify({ error: code }), { status: 401 });
+      const err = await client()
+        .get("/v2/user/profile/basic")
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(CredentialsRejectedError);
+      expect((err as Error).message).toContain("reconfigure: true");
+      expect(await readTokens()).toEqual(original);
+    });
+  }
+
+  test("a logout while the refresh is in flight is not undone by writing the new tokens", async () => {
+    await writeTokens(tokens({ expires_at: Date.now() - 1000 }));
+    onToken = async () => {
+      await deleteTokens();
+      return json({ access_token: "access-2", refresh_token: "refresh-2", expires_in: 3600, token_type: "bearer" });
+    };
+    await expect(client().get("/v2/user/profile/basic")).rejects.toBeInstanceOf(NotLoggedInError);
+    expect(await readTokens()).toBeNull();
+    expect(apiCalls).toHaveLength(0);
+  });
+
+  test("a re-login while the refresh is in flight wins over the refreshed tokens", async () => {
+    await writeTokens(tokens({ expires_at: Date.now() - 1000 }));
+    onToken = async () => {
+      await writeTokens(tokens({ access_token: "access-login", refresh_token: "refresh-login" }));
+      return json({ access_token: "access-2", refresh_token: "refresh-2", expires_in: 3600, token_type: "bearer" });
+    };
+    await client().get("/v2/user/profile/basic");
+    expect(apiCalls.at(-1)?.authorization).toBe("Bearer access-login");
+    expect((await readTokens())?.refresh_token).toBe("refresh-login");
   });
 
   test("throws NotLoggedInError when a refresh is needed but no refresh token is stored", async () => {

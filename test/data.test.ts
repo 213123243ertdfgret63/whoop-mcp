@@ -3,13 +3,17 @@ import { baseline, correlate, slopePerWeek, stats, trainingLoad, trend } from ".
 import {
   addDays,
   assembleDays,
+  currentDayIndex,
   cycleDate,
+  dataQuality,
   dateRange,
   dayRow,
+  fetchDays,
   listAll,
   localDate,
   localTime,
   offsetMinutes,
+  PATHS,
   shapeWorkout,
   todayLocal,
 } from "../src/whoop/data.ts";
@@ -175,5 +179,94 @@ describe("analytics", () => {
       acute_chronic_ratio: 1.33,
       ratio_band: "above usual (ramping up)",
     });
+  });
+});
+
+describe("the WHOOP day still running", () => {
+  // Strap off overnight: the cycle that started on the evening of the 25th never ended.
+  const open = [cycle(1, "2026-10-24T22:00:00Z", "2026-10-25T22:00:00Z"), cycle(2, "2026-10-25T22:00:00Z", undefined)];
+  const walks = [
+    workout("w1", "2026-10-27T07:00:00Z", "2026-10-27T08:00:00Z"),
+    workout("w2", "2026-10-27T12:00:00Z", "2026-10-27T13:00:00Z"),
+  ];
+  const days = assembleDays("2026-10-22", "2026-10-27", open, [], [], walks);
+
+  test("falls back to the open cycle when the last date has none, keeping its workouts", () => {
+    const idx = currentDayIndex(days);
+    expect(days[idx]?.date).toBe("2026-10-26");
+    expect(days[idx]?.workouts.map((w) => w.id)).toEqual(["w1", "w2"]);
+  });
+
+  test("keeps the last date when it has its own cycle, or when nothing is open", () => {
+    const closed = assembleDays("2026-10-25", "2026-10-27", [open[0]!], [], [], []);
+    expect(currentDayIndex(closed)).toBe(2);
+    const own = assembleDays("2026-10-25", "2026-10-26", open, [], [], []);
+    expect(currentDayIndex(own)).toBe(1);
+    expect(currentDayIndex([])).toBe(-1);
+  });
+
+  test("data quality separates days before the first data and days inside the open cycle from missed wear", () => {
+    const q = dataQuality(days, false, "2026-10-25");
+    expect(q.first_data_date).toBe("2026-10-25");
+    expect(q.days_before_first_data).toBe(3);
+    expect(q.in_open_cycle).toEqual(["2026-10-27"]);
+    expect(q.days_missing_data).toEqual([]);
+  });
+
+  test("without proof that no older data exists, early gaps stay missing", () => {
+    const q = dataQuality(days, false);
+    expect(q.first_data_date).toBeUndefined();
+    expect(q.days_missing_data).toEqual(["2026-10-22", "2026-10-23", "2026-10-24"]);
+  });
+});
+
+describe("partial days and sleep shortfall", () => {
+  const row = (date: string, extra: Partial<ReturnType<typeof dayRow>> = {}) =>
+    ({ ...dayRow({ date, naps: [], workouts: [] }), ...extra }) as ReturnType<typeof dayRow>;
+
+  test("baseline doesn't score today's partial whole-day totals against full days", () => {
+    const history = Array.from({ length: 10 }, (_, i) => row(addDays("2026-10-01", i), { strain: 10 + (i % 3) }));
+    const b = baseline(history, row("2026-10-11", { strain: 3.1, in_progress: true }), "strain");
+    expect(b).toMatchObject({ today: null, today_so_far: 3.1, z_score: null, today_percentile: null });
+    expect(b.note).toContain("in progress");
+    // Recovery is final in the morning, so it is still compared.
+    const r = baseline(
+      history.map((h) => ({ ...h, recovery_pct: 50 + (Number(h.date.slice(-1)) % 2) * 10 })),
+      row("2026-10-11", { recovery_pct: 80, in_progress: true }),
+      "recovery",
+    );
+    expect(r.z_score).not.toBeNull();
+  });
+
+  test("sleep shortfall is the average nightly gap, not a sum that counts carried debt again", () => {
+    const rows = Array.from({ length: 7 }, (_, i) => row(addDays("2026-10-01", i), { sleep_h: 7, sleep_needed_h: 8 }));
+    const load = trainingLoad(rows);
+    expect(load.sleep_shortfall_7d_avg_h).toBe(1);
+    expect(load).not.toHaveProperty("sleep_debt_7d_h");
+  });
+});
+
+describe("fetchDays first_data_date", () => {
+  const cycles = [cycle(1, "2026-10-25T22:00:00Z", "2026-10-26T22:00:00Z")];
+  const getter = (older: unknown[]) => ({
+    calls: [] as { path: string; query?: Record<string, unknown> }[],
+    async get<T>(path: string, query?: Record<string, string | number | undefined>): Promise<T> {
+      this.calls.push({ path, query });
+      if (path === PATHS.cycles && query?.limit === 1) return { records: older } as T;
+      return { records: path === PATHS.cycles ? cycles : [] } as T;
+    },
+  });
+
+  test("is set only when WHOOP has nothing older than the window", async () => {
+    const none = await fetchDays(getter([]), "2026-10-20", "2026-10-27");
+    expect(none.first_data_date).toBe("2026-10-26");
+    const some = await fetchDays(getter([cycles[0]]), "2026-10-20", "2026-10-27");
+    expect(some.first_data_date).toBeUndefined();
+  });
+
+  test("makes no extra request when the window starts with data", async () => {
+    const g = getter([]);
+    await fetchDays(g, "2026-10-26", "2026-10-27");
+    expect(g.calls.some((c) => c.query?.limit === 1)).toBe(false);
   });
 });

@@ -7,7 +7,7 @@ import { BackgroundLogin } from "../src/auth/background-login.ts";
 import { SCOPES, VERSION } from "../src/config.ts";
 import { createServer } from "../src/server.ts";
 import { NotLoggedInError, WhoopApiError, type WhoopClient } from "../src/whoop/client.ts";
-import { addDays, todayLocal } from "../src/whoop/data.ts";
+import { addDays, cycleDate, todayLocal } from "../src/whoop/data.ts";
 import { cycle, recovery, sleep, workout } from "./fixtures.ts";
 
 type Responses = Record<string, unknown>;
@@ -56,8 +56,12 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-async function connect(responses: Responses = OK_RESPONSES, loginFlow?: BackgroundLogin) {
-  const stub = stubClient(responses);
+async function connect(
+  responses: Responses = OK_RESPONSES,
+  loginFlow?: BackgroundLogin,
+  extra: Record<string, unknown> = {},
+) {
+  const stub = Object.assign(stubClient(responses), extra);
   const server = createServer(stub as unknown as WhoopClient, loginFlow);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -117,6 +121,8 @@ describe("whoop_status", () => {
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({
       logged_in: false,
+      session_expired: false,
+      last_error: null,
       app_credentials: "missing",
       login: { state: "idle" },
       token_file: join(home, "tokens.json"),
@@ -156,7 +162,8 @@ describe("whoop_status", () => {
     expect(data.has_refresh_token).toBe(true);
     expect(data.access_token_expires_in_s).toBeGreaterThan(3590);
     expect(data.access_token_expires_in_s).toBeLessThanOrEqual(3600);
-    expect(text(result)).toContain("WHOOP is connected.");
+    expect(text(result)).toContain("Connected, but without read:body_measurement");
+    expect(text(result)).not.toContain("WHOOP is connected.");
   });
 
   test("warns when logged in but the app credentials are gone (the next refresh would fail)", async () => {
@@ -394,6 +401,20 @@ describe("data tools", () => {
     });
   });
 
+  test("whoop_today reports how many days its comparison rests on", async () => {
+    const { client } = await connect(data);
+    const result = await client.callTool({ name: "whoop_today", arguments: {} });
+    const vs = (result.structuredContent as { vs_last_30_days: Record<string, unknown>[] }).vs_last_30_days;
+    expect(vs.find((v) => v.metric === "recovery")).toMatchObject({ baseline_days: 1, baseline_avg: null });
+    expect(result.structuredContent).toMatchObject({ baseline_window: { days_with_data: 1 } });
+  });
+
+  test("whoop_today text is compact JSON", async () => {
+    const { client } = await connect(data);
+    const result = await client.callTool({ name: "whoop_today", arguments: {} });
+    expect(text(result)).not.toContain('\n  "');
+  });
+
   test("whoop_daily_summaries returns a row per day", async () => {
     const { client } = await connect(data);
     const result = await client.callTool({ name: "whoop_daily_summaries", arguments: { days: 2 } });
@@ -421,6 +442,29 @@ describe("data tools", () => {
     expect(miss.structuredContent).toMatchObject({ workouts: [] });
   });
 
+  test("raw output is limited to short ranges", async () => {
+    const { client, stub } = await connect(data);
+    for (const name of ["whoop_daily_summaries", "whoop_sleep", "whoop_workouts"]) {
+      const over = await client.callTool({ name, arguments: { days: 8, raw: true } });
+      expect(over.isError).toBe(true);
+      expect(text(over)).toContain("raw is limited to 7 days");
+    }
+    expect(stub.calls).toEqual([]);
+    for (const name of ["whoop_daily_summaries", "whoop_sleep", "whoop_workouts"]) {
+      const ok = await client.callTool({ name, arguments: { days: 7, raw: true } });
+      expect(ok.isError).toBeFalsy();
+      expect(ok.structuredContent).toHaveProperty("raw");
+    }
+  });
+
+  test("workout and training-load descriptions define zones by heart-rate reserve", async () => {
+    const { client } = await connect(data);
+    const { tools } = await client.listTools();
+    for (const name of ["whoop_workouts", "whoop_training_load"]) {
+      expect(tools.find((t) => t.name === name)?.description).toContain("heart-rate reserve");
+    }
+  });
+
   test("whoop_get_record fetches one record by type and id", async () => {
     const { client, stub } = await connect({ "/v2/cycle/2/recovery": recovery(2, "s2", 25) });
     const result = await client.callTool({
@@ -429,5 +473,127 @@ describe("data tools", () => {
     });
     expect(result.structuredContent).toMatchObject({ shaped: { recovery_pct: 25 } });
     expect(stub.calls).toEqual(["/v2/cycle/2/recovery"]);
+  });
+});
+
+describe("whoop_today honesty", () => {
+  const today = todayLocal();
+  const yesterday = addDays(today, -1);
+
+  test("after a night without the strap it shows the WHOOP day still running and its workouts", async () => {
+    // Started 40 h ago and never ended: always labelled before today, always past the 30 h no-sleep threshold.
+    const openStart = new Date(Date.now() - 40 * 3_600_000).toISOString();
+    const walkStart = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    const { client } = await connect({
+      "/v2/cycle": { records: [cycle(1, openStart, undefined)] },
+      "/v2/recovery": { records: [] },
+      "/v2/activity/sleep": { records: [] },
+      "/v2/activity/workout": { records: [workout("w1", walkStart, new Date(Date.now() - 3_600_000).toISOString())] },
+    });
+    const result = await client.callTool({ name: "whoop_today", arguments: {} });
+    expect(result.structuredContent).toMatchObject({
+      date: today,
+      current_cycle_date: cycleDate({ start: openStart, timezone_offset: "Z" }),
+    });
+    expect((result.structuredContent as { workouts: unknown[] }).workouts).toHaveLength(1);
+    expect(result.structuredContent).toHaveProperty("no_sleep_since");
+    expect(text(result)).toContain("still running");
+    expect(text(result)).toContain("no recovery recorded");
+    expect(text(result)).toContain("strap may have been off");
+  });
+
+  const oneDay = (rec: ReturnType<typeof recovery>) => ({
+    "/v2/cycle": { records: [cycle(1, `${yesterday}T23:00:00Z`, undefined)] },
+    "/v2/recovery": { records: [rec] },
+    "/v2/activity/sleep": { records: [sleep("s1", 1, `${yesterday}T23:00:00Z`, `${today}T07:00:00Z`)] },
+    "/v2/activity/workout": { records: [] },
+  });
+
+  test("an unscorable recovery is not reported as still to come", async () => {
+    const { client } = await connect(oneDay({ ...recovery(1, "s1"), score_state: "UNSCORABLE", score: undefined }));
+    const result = await client.callTool({ name: "whoop_today", arguments: {} });
+    expect(text(result)).toContain("could not score recovery");
+    expect(text(result)).not.toContain("not scored yet");
+  });
+
+  test("a calibrating red recovery carries a provisional caveat", async () => {
+    const rec = recovery(1, "s1", 20);
+    const { client } = await connect(oneDay({ ...rec, score: { ...rec.score!, user_calibrating: true } }));
+    const result = await client.callTool({ name: "whoop_today", arguments: {} });
+    expect(result.structuredContent).toMatchObject({ recovery: { zone: "red", calibrating: true } });
+    expect((result.structuredContent as { recovery: { zone_note?: string } }).recovery.zone_note).toContain(
+      "provisional",
+    );
+    expect(text(result)).toContain("provisional because WHOOP is still calibrating");
+  });
+});
+
+describe("whoop_status session state", () => {
+  const stored = {
+    access_token: "a",
+    refresh_token: "r",
+    token_type: "bearer",
+    scope: SCOPES.join(" "),
+    expires_at: Date.now() + 3600_000,
+    obtained_at: Date.now(),
+  };
+  beforeEach(() => {
+    process.env.WHOOP_CLIENT_ID = "id";
+    process.env.WHOOP_CLIENT_SECRET = "secret";
+  });
+
+  test("an expired session is reported as logged out with a re-login hint", async () => {
+    await writeTokenFile(stored);
+    const { client } = await connect(OK_RESPONSES, undefined, {
+      authProblem: () => ({ session_expired: true, last_error: "The WHOOP session has expired or was revoked." }),
+    });
+    const result = await client.callTool({ name: "whoop_status", arguments: {} });
+    expect(result.structuredContent).toMatchObject({ logged_in: false, session_expired: true });
+    expect(text(result)).toContain("expired or was revoked");
+    expect(text(result)).not.toContain("WHOOP is connected.");
+  });
+
+  test("a failed refresh on a live session is surfaced, not hidden behind 'connected'", async () => {
+    await writeTokenFile(stored);
+    const { client } = await connect(OK_RESPONSES, undefined, {
+      authProblem: () => ({ session_expired: false, last_error: "WHOOP token endpoint returned 500: boom" }),
+    });
+    const result = await client.callTool({ name: "whoop_status", arguments: {} });
+    expect(result.structuredContent).toMatchObject({ logged_in: true, last_error: expect.stringContaining("500") });
+    expect(text(result)).toContain("the last token refresh failed");
+  });
+
+  test("all scopes and valid tokens read as connected", async () => {
+    await writeTokenFile(stored);
+    const { client } = await connect();
+    const result = await client.callTool({ name: "whoop_status", arguments: {} });
+    expect(text(result)).toContain("WHOOP is connected.");
+  });
+});
+
+describe("whoop_baselines", () => {
+  test("uses the WHOOP day still running and keeps today's partial strain out of the comparison", async () => {
+    const today = todayLocal();
+    const openStart = new Date(Date.now() - 36 * 3_600_000).toISOString();
+    const cycles = Array.from({ length: 10 }, (_, i) => {
+      const d = addDays(today, -12 + i);
+      return cycle(i + 1, `${d}T00:00:00Z`, `${addDays(d, 1)}T00:00:00Z`);
+    });
+    cycles.push(cycle(99, openStart, undefined));
+    const { client } = await connect({
+      "/v2/cycle": { records: cycles },
+      "/v2/recovery": { records: [] },
+      "/v2/activity/sleep": { records: [] },
+      "/v2/activity/workout": { records: [] },
+    });
+    const result = await client.callTool({ name: "whoop_baselines", arguments: { metrics: ["strain"] } });
+    const data = result.structuredContent as {
+      current_cycle_date?: string;
+      in_progress: boolean;
+      baselines: Record<string, unknown>[];
+    };
+    expect(data.current_cycle_date).toBe(cycleDate({ start: openStart, timezone_offset: "Z" }));
+    expect(data.in_progress).toBe(true);
+    expect(data.baselines[0]).toMatchObject({ metric: "strain", today: null, today_so_far: 10, z_score: null });
   });
 });

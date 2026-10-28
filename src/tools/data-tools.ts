@@ -16,6 +16,7 @@ import {
 import {
   addDays,
   type Cycle,
+  currentDayIndex,
   type Day,
   dataQuality,
   dayRow,
@@ -25,6 +26,7 @@ import {
   type IsoDate,
   listAll,
   localDate,
+  localTime,
   PATHS,
   type Recovery,
   type Sleep,
@@ -38,6 +40,8 @@ import {
 import { DISCLAIMER, errorResult, jsonResult, READ_ONLY } from "./common.ts";
 
 const MAX_DAYS = 90;
+/** Extra days fetched so a WHOOP day still running from a few dates back keeps its full history window. */
+const ROLLBACK_MARGIN_DAYS = 7;
 
 /** Shared date-range inputs: an explicit range, or the last `days` days ending on `end_date` (default today). */
 const rangeShape = (defaultDays: number) => ({
@@ -70,7 +74,24 @@ export function resolveRange(input: RangeInput, defaultDays: number): { from: Is
   return { from, to };
 }
 
-const raw = z.boolean().default(false).describe("Also return the original WHOOP records.");
+const MAX_RAW_DAYS = 7;
+const raw = z
+  .boolean()
+  .default(false)
+  .describe(`Also return the original WHOOP records. Large: only for ranges of up to ${MAX_RAW_DAYS} days.`);
+
+function checkRaw(wantRaw: boolean | undefined, from: IsoDate, to: IsoDate): void {
+  const n = daysBetween(from, to) + 1;
+  if (wantRaw && n > MAX_RAW_DAYS) {
+    throw new InputError(
+      `raw is limited to ${MAX_RAW_DAYS} days (this range is ${n}); narrow the range, or use whoop_get_record for one record.`,
+    );
+  }
+}
+
+/** How WHOOP defines its heart-rate zones; Claude would otherwise assume % of max heart rate. */
+export const ZONE_LEGEND =
+  "WHOOP heart-rate zones are % of heart-rate reserve: bpm = resting HR + pct x (max HR - resting HR); z0 under 50%, z1 50-60%, z2 60-70%, z3 70-80%, z4 80-90%, z5 90-100%. Do not convert them with % of max HR.";
 const metric = z.enum(METRIC_NAMES);
 const METRIC_HELP = Object.entries(METRICS)
   .map(([name, m]) => `${name} = ${m.label}`)
@@ -85,6 +106,20 @@ function rawDays(days: Day[]) {
     naps: d.naps,
     workouts: d.workouts,
   }));
+}
+
+function localTimeOf(iso: string | undefined, offset: string | undefined): string {
+  return localTime(iso, offset) ?? "an unknown time";
+}
+
+/** One phrase for the recovery state, so Claude never waits for a score that will not come. */
+export function recoveryText(r: Recovery | undefined, pct: number | null, zone: string | null): string {
+  if (!r) return "no recovery recorded for last night";
+  if (r.score_state === "PENDING_SCORE") return "recovery still being scored";
+  if (r.score_state === "UNSCORABLE")
+    return "WHOOP could not score recovery (not enough data, e.g. strap off or loose)";
+  const base = `recovery ${pct ?? "n/a"}%${zone ? ` (${zone})` : ""}`;
+  return r.score?.user_calibrating ? `${base}, provisional because WHOOP is still calibrating` : base;
 }
 
 export function registerDataTools(server: McpServer, client: Getter): void {
@@ -112,25 +147,38 @@ export function registerDataTools(server: McpServer, client: Getter): void {
   tool(
     "whoop_today",
     "Today on WHOOP",
-    "Start here for 'how am I today?', training readiness or 'should I train hard?'. One snapshot for a day: last night's sleep (stages, sleep needed vs. got), the morning's recovery (score, HRV, resting HR, SpO2, skin temp), the day's strain, calories and steps so far (in_progress while the day is still running), the day's workouts, and how each key number compares with the previous 30 days (z-scores). Recovery is green at 67-100%, yellow at 34-66% and red at 0-33%.",
+    "Start here for 'how am I today?', training readiness or 'should I train hard?'. One snapshot for a day: last night's sleep (stages, sleep needed vs. got), the morning's recovery (score, HRV, resting HR, SpO2, skin temp), the day's strain, calories and steps so far (in_progress while the day is still running), the day's workouts, and how each key number compares with the previous 30 days. A WHOOP day runs from sleep to sleep, not midnight to midnight: after midnight, or after a night without the strap, the day still running is shown and current_cycle_date says which. Comparisons need 7+ days of history (baseline_days); with fewer, describe today's values and say the baseline is still forming. Recovery is green at 67-100%, yellow at 34-66% and red at 0-33%; while WHOOP is calibrating (the first weeks) treat the score as provisional.",
     {
       date: z.iso.date().optional().describe("Local date, YYYY-MM-DD. Defaults to today."),
       raw,
     },
     async ({ date, raw: wantRaw }) => {
-      const day = date ?? todayLocal();
-      const { days, truncated } = await fetchDays(client, addDays(day, -30), day);
-      const today = days.at(-1);
-      if (!today) throw new InputError(`No data for ${day}.`);
-      const history = days.slice(0, -1).map(dayRow);
+      const requested = date ?? todayLocal();
+      const { days, truncated, first_data_date } = await fetchDays(
+        client,
+        addDays(requested, -(30 + ROLLBACK_MARGIN_DAYS)),
+        requested,
+      );
+      const idx = currentDayIndex(days);
+      const today = days[idx];
+      if (!today) throw new InputError(`No data for ${requested}.`);
+      const historyDays = days.slice(Math.max(0, idx - 30), idx);
+      const history = historyDays.map(dayRow);
       const row = dayRow(today);
       const keys: Metric[] = ["recovery", "hrv", "rhr", "sleep_hours", "sleep_performance", "respiratory_rate"];
       if (!row.in_progress) keys.push("strain");
       const vs = keys.map((m) => {
         const b = baseline(history, row, m);
-        return { metric: m, today: b.today, avg_30d: "mean" in b ? b.mean : null, z_score: b.z_score };
+        return {
+          metric: m,
+          today: b.today,
+          baseline_avg: b.n >= 7 && "mean" in b ? b.mean : null,
+          baseline_days: b.n,
+          z_score: b.z_score,
+        };
       });
       const recovery = shapeRecovery(today.recovery);
+      const calibrating = recovery?.calibrating === true;
       const zone =
         recovery?.recovery_pct == null
           ? null
@@ -139,21 +187,53 @@ export function registerDataTools(server: McpServer, client: Getter): void {
             : recovery.recovery_pct >= 34
               ? "yellow"
               : "red";
+      const rolled = today.date !== requested && today.cycle !== undefined;
+      const openSince = today.cycle && !today.cycle.end ? today.cycle.start : undefined;
+      const noSleepSince =
+        openSince && Date.now() - Date.parse(openSince) > 30 * 3_600_000
+          ? localTimeOf(openSince, today.cycle?.timezone_offset)
+          : null;
+      const lead = rolled
+        ? `The WHOOP day that started ${localTimeOf(today.cycle?.start, today.cycle?.timezone_offset)} is still running (it rolls over after the next sleep), so this shows ${today.date}. `
+        : "";
+      const noSleep = noSleepSince
+        ? ` No sleep has been detected since ${noSleepSince}; the strap may have been off overnight.`
+        : "";
       return {
         data: {
-          date: day,
-          recovery: recovery ? { ...recovery, zone } : null,
+          date: requested,
+          ...(rolled ? { current_cycle_date: today.date } : {}),
+          recovery: recovery
+            ? {
+                ...recovery,
+                zone,
+                ...(calibrating
+                  ? {
+                      zone_note:
+                        "WHOOP is still calibrating to this person, so the score and zone are provisional; don't cut habitual activity because of them.",
+                    }
+                  : {}),
+              }
+            : null,
           sleep: shapeSleep(today.sleep),
           naps: today.naps.map(shapeSleep),
           day: shapeCycle(today.cycle),
           workouts: today.workouts.map(shapeWorkout),
           vs_last_30_days: vs,
+          baseline_window: {
+            from: historyDays[0]?.date ?? null,
+            to: historyDays.at(-1)?.date ?? null,
+            days_with_data: historyDays.filter((d) => d.cycle).length,
+            first_data_date: first_data_date ?? null,
+            calibrating_days: historyDays.filter((d) => d.recovery?.score?.user_calibrating).length,
+          },
           data_quality: dataQuality([today], truncated),
+          ...(noSleepSince ? { no_sleep_since: noSleepSince } : {}),
           ...(wantRaw ? { raw: rawDays([today])[0] } : {}),
         },
         summary: today.cycle
-          ? `WHOOP for ${day}: recovery ${recovery?.recovery_pct ?? "not scored yet"}${zone ? ` (${zone})` : ""}, strain ${row.strain ?? "n/a"}${row.in_progress ? " so far" : ""}, ${today.workouts.length} workout(s).`
-          : `No WHOOP cycle for ${day} yet.`,
+          ? `${lead}WHOOP for ${today.date}: ${recoveryText(today.recovery, recovery?.recovery_pct ?? null, zone)}, strain ${row.strain ?? "n/a"}${row.in_progress ? " so far" : ""}, ${today.workouts.length} workout(s).${noSleep}`
+          : `No WHOOP cycle for ${requested} yet.`,
       };
     },
   );
@@ -165,7 +245,8 @@ export function registerDataTools(server: McpServer, client: Getter): void {
     { ...rangeShape(7), raw },
     async (args) => {
       const { from, to } = resolveRange(args, 7);
-      const { days, truncated } = await fetchDays(client, from, to);
+      checkRaw(args.raw, from, to);
+      const { days, truncated, first_data_date } = await fetchDays(client, from, to);
       const rows = days.map(dayRow);
       const avg = (m: Metric) => mean(complete(rows, m).map((r) => value(r, m)));
       return {
@@ -184,7 +265,7 @@ export function registerDataTools(server: McpServer, client: Getter): void {
             steps: avg("steps"),
             workout_min: avg("workout_minutes"),
           },
-          data_quality: dataQuality(days, truncated),
+          data_quality: dataQuality(days, truncated, first_data_date),
           ...(args.raw ? { raw: rawDays(days) } : {}),
         },
         summary: `${rows.length} day(s) of WHOOP data from ${from} to ${to}.`,
@@ -203,6 +284,7 @@ export function registerDataTools(server: McpServer, client: Getter): void {
     },
     async (args) => {
       const { from, to } = resolveRange(args, 7);
+      checkRaw(args.raw, from, to);
       const start = new Date(`${addDays(from, -1)}T12:00:00Z`);
       const end = new Date(`${addDays(to, 1)}T12:00:00Z`);
       const { records, truncated } = await listAll<Sleep>(client, PATHS.sleeps, start, end);
@@ -238,7 +320,7 @@ export function registerDataTools(server: McpServer, client: Getter): void {
   tool(
     "whoop_workouts",
     "WHOOP workouts",
-    "Every workout in a date range (default last 7 days, max 90): sport, local start/end, duration, strain, average and max HR, kcal, distance, altitude gain, minutes in each heart-rate zone (z0-z5), percent recorded. Plus totals per sport and minutes per zone. Optional sport filter (matches WHOOP's sport name, e.g. running, walking, weightlifting).",
+    `Every workout in a date range (default last 7 days, max 90): sport, local start/end, duration, strain, average and max HR, kcal, distance, altitude gain, minutes in each heart-rate zone (z0-z5), percent recorded. Plus totals per sport and minutes per zone. Optional sport filter (matches WHOOP's sport name, e.g. running, walking, weightlifting). ${ZONE_LEGEND}`,
     {
       ...rangeShape(7),
       sport: z.string().optional().describe("Only this sport (case-insensitive substring of the sport name)."),
@@ -246,6 +328,7 @@ export function registerDataTools(server: McpServer, client: Getter): void {
     },
     async (args) => {
       const { from, to } = resolveRange(args, 7);
+      checkRaw(args.raw, from, to);
       const start = new Date(`${addDays(from, -1)}T00:00:00Z`);
       const end = new Date(`${addDays(to, 2)}T00:00:00Z`);
       const { records, truncated } = await listAll<Workout>(client, PATHS.workouts, start, end);
@@ -297,12 +380,12 @@ export function registerDataTools(server: McpServer, client: Getter): void {
     },
     async (args) => {
       const { from, to } = resolveRange(args, 30);
-      const { days, truncated } = await fetchDays(client, from, to, {
+      const { days, truncated, first_data_date } = await fetchDays(client, from, to, {
         workouts: args.metric === "workouts" || args.metric === "workout_minutes",
       });
       const t = trend(days.map(dayRow), args.metric);
       return {
-        data: { from, to, ...t, data_quality: dataQuality(days, truncated) },
+        data: { from, to, ...t, data_quality: dataQuality(days, truncated, first_data_date) },
         summary: `${METRICS[args.metric].label} from ${from} to ${to}: mean ${"mean" in t ? t.mean : "n/a"}, slope ${t.slope_per_week ?? "n/a"} per week.`,
       };
     },
@@ -318,21 +401,30 @@ export function registerDataTools(server: McpServer, client: Getter): void {
       metrics: z.array(metric).optional().describe("Which metrics."),
     },
     async ({ date, days: n, metrics }) => {
-      const day = date ?? todayLocal();
-      const { days, truncated } = await fetchDays(client, addDays(day, -n), day);
+      const requested = date ?? todayLocal();
+      const { days, truncated, first_data_date } = await fetchDays(
+        client,
+        addDays(requested, -(n + ROLLBACK_MARGIN_DAYS)),
+        requested,
+      );
+      const idx = currentDayIndex(days);
       const rows = days.map(dayRow);
-      const today = rows.at(-1);
+      const today = rows[idx];
+      const day = today?.date ?? requested;
+      const history = rows.slice(Math.max(0, idx - n), idx);
       const list = metrics?.length
         ? metrics
         : (["recovery", "hrv", "rhr", "sleep_hours", "sleep_performance", "respiratory_rate", "strain"] as Metric[]);
       return {
         data: {
-          date: day,
-          history: { from: addDays(day, -n), to: addDays(day, -1) },
-          baselines: list.map((m) => baseline(rows.slice(0, -1), today, m)),
-          data_quality: dataQuality(days, truncated),
+          date: requested,
+          ...(day !== requested ? { current_cycle_date: day } : {}),
+          in_progress: today?.in_progress ?? false,
+          history: { from: history[0]?.date ?? addDays(day, -n), to: history.at(-1)?.date ?? addDays(day, -1) },
+          baselines: list.map((m) => baseline(history, today, m)),
+          data_quality: dataQuality(days.slice(Math.max(0, idx - n), idx + 1), truncated, first_data_date),
         },
-        summary: `Baselines over the ${n} days before ${day}.`,
+        summary: `Baselines over ${history.length} day(s) before ${day}${history[0] ? ` (${history[0].date} to ${history.at(-1)?.date})` : ""}.`,
       };
     },
   );
@@ -370,7 +462,10 @@ export function registerDataTools(server: McpServer, client: Getter): void {
           period_a: a,
           period_b: b,
           comparison: list.map((m) => compare(ra, rb, m)),
-          data_quality: { period_a: dataQuality(da.days, da.truncated), period_b: dataQuality(db.days, db.truncated) },
+          data_quality: {
+            period_a: dataQuality(da.days, da.truncated, da.first_data_date),
+            period_b: dataQuality(db.days, db.truncated, db.first_data_date),
+          },
         },
         summary: `Compared ${a.from}..${a.to} with ${b.from}..${b.to}.`,
       };
@@ -380,14 +475,14 @@ export function registerDataTools(server: McpServer, client: Getter): void {
   tool(
     "whoop_training_load",
     "WHOOP training load",
-    "Training load for programming and deload decisions: daily strain over the last N days (default 28, max 90), acute (7-day) vs chronic (28-day) average strain and their ratio (about 0.8-1.3 is the usual band; well above it means load is ramping up fast), sleep debt over the last 7 days (needed minus asleep), the 7-day average recovery, and workout minutes per heart-rate zone over the last 7 days.",
+    `Training load for programming and deload decisions: daily strain over the last N days (default 28, max 90), acute (7-day) vs chronic (28-day) average strain and their ratio (about 0.8-1.3 is the usual band; well above it means load is ramping up fast), the average nightly sleep shortfall over the last 7 days (needed minus asleep), the 7-day average recovery, and workout minutes per heart-rate zone over the last 7 days. Read ratio_band together with recovery_7d_avg: a low ratio with low recovery is usually an appropriate deload, not a reason to add load. ${ZONE_LEGEND}`,
     {
       days: z.number().int().min(7).max(MAX_DAYS).default(28).describe("Days of daily strain to return."),
     },
     async ({ days: n }) => {
       const to = todayLocal();
       const from = addDays(to, -(Math.max(n, 28) - 1));
-      const { days, truncated } = await fetchDays(client, from, to);
+      const { days, truncated, first_data_date } = await fetchDays(client, from, to);
       const rows = days.map(dayRow);
       const zones = { z0: 0, z1: 0, z2: 0, z3: 0, z4: 0, z5: 0 };
       for (const d of days.slice(-7)) {
@@ -408,7 +503,7 @@ export function registerDataTools(server: McpServer, client: Getter): void {
             workout_min: r.workout_min,
             in_progress: r.in_progress,
           })),
-          data_quality: dataQuality(days, truncated),
+          data_quality: dataQuality(days, truncated, first_data_date),
         },
         summary: `Training load up to ${to}.`,
       };
@@ -428,10 +523,10 @@ export function registerDataTools(server: McpServer, client: Getter): void {
     async ({ x, y, lag_days, days: n }) => {
       const to = todayLocal();
       const from = addDays(to, -(n - 1));
-      const { days, truncated } = await fetchDays(client, from, to);
+      const { days, truncated, first_data_date } = await fetchDays(client, from, to);
       const c = correlate(days.map(dayRow), x, y, lag_days);
       return {
-        data: { from, to, ...c, data_quality: dataQuality(days, truncated) },
+        data: { from, to, ...c, data_quality: dataQuality(days, truncated, first_data_date) },
         summary: `${x} vs ${y}${lag_days ? ` ${lag_days} day(s) later` : ""}: r = ${c.pearson_r ?? "n/a"} (n = ${c.n}).`,
       };
     },

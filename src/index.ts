@@ -9,6 +9,7 @@ import { VERSION } from "./config.ts";
 import { log } from "./log.ts";
 import { createServer } from "./server.ts";
 import { loginAndSave, runSetup } from "./setup.ts";
+import { WhoopClient } from "./whoop/client.ts";
 
 const [command = "serve", ...rest] = process.argv.slice(2);
 const flag = (name: string) => rest.includes(name);
@@ -37,9 +38,11 @@ async function main(): Promise<void> {
       // Goes to the client's MCP log (stderr), so you can tell which build a client is running.
       log(`v${VERSION} starting (stdio)`);
       {
-        // One login flow per process, shared by whichever protocol-era instance serves the connection.
+        // One login flow and one API client per process, shared by whichever protocol-era instance serves the
+        // connection, so token refreshes stay single-flight across instances.
         const loginFlow = new BackgroundLogin();
-        serveStdio(() => createServer(undefined, loginFlow));
+        const client = new WhoopClient();
+        serveStdio(() => createServer(client, loginFlow));
         // When the client goes away mid-login, close the local login server so this process can exit and
         // doesn't keep the callback port busy for the next session.
         process.stdin.once("end", () => void loginFlow.cancel());

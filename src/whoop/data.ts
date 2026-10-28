@@ -121,6 +121,8 @@ export interface Day {
 export interface DaysResult {
   days: Day[];
   truncated: boolean;
+  /** Set when the range starts before the account's first cycle, i.e. WHOOP has no older data at all. */
+  first_data_date?: IsoDate;
 }
 
 /**
@@ -143,10 +145,17 @@ export async function fetchDays(
       ? Promise.resolve<Fetched<Workout>>({ records: [], truncated: false })
       : listAll<Workout>(client, PATHS.workouts, start, end),
   ]);
-  return {
-    days: assembleDays(from, to, cycles.records, recoveries.records, sleeps.records, workouts.records),
-    truncated: cycles.truncated || recoveries.truncated || sleeps.truncated || workouts.truncated,
-  };
+  const days = assembleDays(from, to, cycles.records, recoveries.records, sleeps.records, workouts.records);
+  const truncated = cycles.truncated || recoveries.truncated || sleeps.truncated || workouts.truncated;
+  // Leading days without data are either before the account existed or a wear gap. One request tells them
+  // apart: the API lists newest first, so a single record ending before the window means older data exists.
+  const firstIdx = days.findIndex((d) => d.cycle);
+  let first_data_date: IsoDate | undefined;
+  if (!truncated && firstIdx > 0) {
+    const older = await client.get<{ records?: Cycle[] }>(PATHS.cycles, { limit: 1, end: start.toISOString() });
+    if (!older.records?.length) first_data_date = days[firstIdx]?.date;
+  }
+  return { days, truncated, ...(first_data_date ? { first_data_date } : {}) };
 }
 
 export function assembleDays(
@@ -336,8 +345,23 @@ export function dayRow(day: Day) {
 
 export type DayRow = ReturnType<typeof dayRow>;
 
-/** What a result's numbers rest on, so the model never mistakes missing or pending data for a value. */
-export function dataQuality(days: Day[], truncated: boolean) {
+/**
+ * Index of the day whose WHOOP cycle is running at the end of `days`. A cycle runs from sleep to sleep, so after
+ * midnight, or after a night without the strap, the last date has no cycle of its own yet and the open cycle is
+ * labelled with an earlier date. Only an open cycle counts, so stale data after a wear gap is never shown as today.
+ */
+export function currentDayIndex(days: Day[]): number {
+  const last = days.length - 1;
+  if (last < 0 || days[last]?.cycle) return last;
+  const open = days.findLastIndex((d) => d.cycle && !d.cycle.end);
+  return open >= 0 ? open : last;
+}
+
+/**
+ * What a result's numbers rest on, so the model never mistakes missing or pending data for a value.
+ * `firstData` is fetchDays' `first_data_date`: dates before it predate the account rather than missed wear.
+ */
+export function dataQuality(days: Day[], truncated: boolean, firstData?: IsoDate) {
   const states: Record<string, number> = {};
   const count = (state: ScoreState | undefined, kind: string) => {
     if (state) states[`${kind}_${state.toLowerCase()}`] = (states[`${kind}_${state.toLowerCase()}`] ?? 0) + 1;
@@ -347,10 +371,18 @@ export function dataQuality(days: Day[], truncated: boolean) {
     count(d.recovery?.score_state, "recovery");
     count(d.sleep?.score_state, "sleep");
   }
+  const before = firstData ? days.filter((d) => d.date < firstData).length : 0;
+  // Dates after a still-open cycle are covered by it (no sleep detected since), not missed wear.
+  const openIdx = days.findLastIndex((d) => d.cycle && !d.cycle.end);
+  const inOpen = openIdx >= 0 ? days.slice(openIdx + 1).filter((d) => !d.cycle) : [];
   return {
     days: days.length,
     days_with_recovery: days.filter((d) => d.recovery?.score_state === "SCORED").length,
-    days_missing_data: days.filter((d) => !d.cycle).map((d) => d.date),
+    days_missing_data: days
+      .filter((d, i) => !d.cycle && !(firstData && d.date < firstData) && !(openIdx >= 0 && i > openIdx))
+      .map((d) => d.date),
+    ...(before ? { first_data_date: firstData, days_before_first_data: before } : {}),
+    ...(inOpen.length ? { in_open_cycle: inOpen.map((d) => d.date) } : {}),
     score_states: states,
     calibrating: days.some((d) => d.recovery?.score?.user_calibrating),
     ...(truncated ? { truncated: "Hit the page limit; the oldest records in the range may be missing." } : {}),
