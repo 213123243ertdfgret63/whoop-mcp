@@ -10,7 +10,7 @@ const tools = [{ name: "whoop_today", description: "Start here." }];
 
 describe("extension manifest", () => {
   test("macOS starts through the launcher with /bin/sh, so a dropped execute bit can't stop it", () => {
-    const m = manifest("macos", tools);
+    const m = manifest(tools);
     expect(m.server).toEqual({
       type: "binary",
       entry_point: "server/launch.sh",
@@ -23,14 +23,8 @@ describe("extension manifest", () => {
     expect(DIRNAME).toBe(["$", "{__dirname}"].join(""));
   });
 
-  test("Windows runs the exe directly", () => {
-    const m = manifest("windows", tools);
-    expect(m.server.mcp_config.command).toBe(`${DIRNAME}/server/whoop-mcp.exe`);
-    expect(m.compatibility.platforms).toEqual(["win32"]);
-  });
-
   test("carries the version, tools, privacy policy and no settings form", () => {
-    const m = manifest("macos", tools) as Record<string, unknown>;
+    const m = manifest(tools) as Record<string, unknown>;
     expect(m.version).toBe(VERSION);
     expect(m.tools).toEqual(tools);
     expect(m.privacy_policies).toHaveLength(1);
@@ -43,7 +37,7 @@ describe("extension manifest", () => {
   });
 
   test("lists the connect and disconnect prompts with the text the server returns", () => {
-    const m = manifest("macos", tools);
+    const m = manifest(tools);
     expect(m.prompts.map((p) => p.name)).toEqual(["whoop-connect", "whoop-disconnect"]);
     expect(m.prompts.map((p) => p.text)).toEqual(PROMPTS.map((p) => p.text));
     expect(m.prompts_generated).toBe(false);
