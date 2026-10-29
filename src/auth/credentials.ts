@@ -8,7 +8,7 @@ import {
   envValue,
   loadClientCredentials,
 } from "../config.ts";
-import { log } from "../log.ts";
+import { errorFields, log } from "../log.ts";
 import { readPrivateText, writePrivateJson } from "./store.ts";
 
 /**
@@ -22,6 +22,40 @@ const KEYCHAIN = { service: "whoop-mcp", name: "client-credentials" } as const;
 
 export function credentialFilePath(): string {
   return join(configDir(), "client.json");
+}
+
+/** Exit status of Apple's `security` tool when there is no such item (errSecItemNotFound). */
+const SECURITY_NOT_FOUND = 44;
+
+/** errSecInvalidOwnerEdit: the item belongs to another program. Bun puts the OSStatus in the message. */
+const isOwnerError = (err: unknown) => /-25244\b/.test(String((err as Error)?.message));
+
+/**
+ * Deletes the keychain item: true if it was there, false if not; throws if it couldn't be deleted.
+ *
+ * On macOS only the program that saved an item may change or delete it, and every whoop-mcp build is a
+ * different (ad-hoc signed) program, so after an upgrade Bun.secrets fails with errSecInvalidOwnerEdit. Apple's
+ * own `security` tool may still delete the user's item, so it is the fallback there.
+ */
+async function deleteKeychainItem(): Promise<boolean> {
+  try {
+    return await Bun.secrets.delete(KEYCHAIN);
+  } catch (err) {
+    // Only for an item another build owns: a locked keychain or a click on Deny stays a failure.
+    if (process.platform !== "darwin" || !isOwnerError(err)) throw err;
+    const proc = Bun.spawn(
+      ["/usr/bin/security", "delete-generic-password", "-s", KEYCHAIN.service, "-a", KEYCHAIN.name],
+      { stdin: "ignore", stdout: "ignore", stderr: "ignore", timeout: 10_000 },
+    );
+    const code = await proc.exited;
+    if (code === 0) return true;
+    if (code === SECURITY_NOT_FOUND) return false;
+    log.warn("could not delete the WHOOP app credentials from the keychain", {
+      ...errorFields(err),
+      security_exit: code,
+    });
+    throw err;
+  }
 }
 
 /** `WHOOP_MCP_CREDENTIAL_STORE=file` forces the file store (tests, headless Linux without a keyring). */
@@ -59,18 +93,30 @@ export async function readStoredCredentials(): Promise<{ creds: ClientCredential
 /** Saves to the keychain when possible, otherwise to the 0600 file. Returns where it went. */
 export async function saveCredentials(creds: ClientCredentials): Promise<CredentialSource> {
   if (keychainEnabled()) {
-    try {
+    const save = async () => {
       await Bun.secrets.set({ ...KEYCHAIN, value: JSON.stringify(creds) });
       // Don't leave an older plaintext copy behind once the keychain holds the credentials.
       await rm(credentialFilePath(), { force: true });
-      return "keychain";
+      return "keychain" as const;
+    };
+    try {
+      return await save();
     } catch {
-      // Fall back to the file store below. An older keychain entry would win over the file on the next read,
-      // so remove it (best effort) rather than silently keep using the old app.
+      // An older keychain entry would win over the file on the next read, so remove it (best effort) rather
+      // than silently keep using the old app. Usually that is an item an earlier build saved and this one
+      // can't overwrite; once it's gone, saving again makes one this build owns.
+      let removed = false;
       try {
-        await Bun.secrets.delete(KEYCHAIN);
+        removed = await deleteKeychainItem();
       } catch {
         // No usable keychain, so nothing there to win over the file either.
+      }
+      if (removed) {
+        try {
+          return await save();
+        } catch {
+          // Fall back to the file store below.
+        }
       }
     }
   }
@@ -96,7 +142,7 @@ export async function deleteStoredCredentials(): Promise<"deleted" | "none" | "f
     }
     if (present) {
       try {
-        const deleted = await Bun.secrets.delete(KEYCHAIN);
+        const deleted = await deleteKeychainItem();
         result = deleted ? "deleted" : present === "unknown" ? "none" : "failed";
       } catch {
         result = "failed";

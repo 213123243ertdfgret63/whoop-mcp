@@ -216,3 +216,102 @@ describe("resolveClientCredentials", () => {
     expect((err as Error).message).toContain("whoop_login");
   });
 });
+
+describe.if(process.platform === "darwin")("keychain items saved by another build (macOS)", () => {
+  // What Bun 1.4 throws for an item another program owns (errSecInvalidOwnerEdit).
+  const ownerError = () => {
+    throw Object.assign(new Error("Invalid attempt to change the owner of this item. (code: -25244)"), {
+      code: "ERR_SECRETS_PLATFORM_ERROR",
+    });
+  };
+  /** Stands in for Apple's `security` tool: records its arguments and exits with `code`. */
+  function fakeSecurity(code: number, onRun = () => {}) {
+    const calls: string[][] = [];
+    const spawn = spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
+      calls.push(cmd);
+      onRun();
+      return { exited: Promise.resolve(code) };
+    }) as unknown as typeof Bun.spawn);
+    return { calls, restore: () => spawn.mockRestore() };
+  }
+
+  test("delete falls back to the security tool when Bun.secrets may not delete the item", async () => {
+    keychain.set("whoop-mcp/client-credentials", JSON.stringify(creds));
+    const del = spyOn(Bun.secrets, "delete").mockImplementation(ownerError);
+    const security = fakeSecurity(0, () => keychain.clear());
+    try {
+      expect(await deleteStoredCredentials()).toBe("deleted");
+      expect(security.calls).toEqual([
+        ["/usr/bin/security", "delete-generic-password", "-s", "whoop-mcp", "-a", "client-credentials"],
+      ]);
+    } finally {
+      security.restore();
+      del.mockRestore();
+    }
+  });
+
+  test("reports failed when the security tool can't delete it either", async () => {
+    keychain.set("whoop-mcp/client-credentials", JSON.stringify(creds));
+    const del = spyOn(Bun.secrets, "delete").mockImplementation(ownerError);
+    const security = fakeSecurity(1);
+    try {
+      expect(await deleteStoredCredentials()).toBe("failed");
+    } finally {
+      security.restore();
+      del.mockRestore();
+    }
+  });
+
+  test("an item the security tool can't find counts as already gone", async () => {
+    const get = spyOn(Bun.secrets, "get").mockImplementation(async () => {
+      throw new Error("keychain locked");
+    });
+    const del = spyOn(Bun.secrets, "delete").mockImplementation(ownerError);
+    const security = fakeSecurity(44);
+    try {
+      expect(await deleteStoredCredentials()).toBe("none");
+    } finally {
+      security.restore();
+      del.mockRestore();
+      get.mockRestore();
+    }
+  });
+
+  test("other keychain errors (denied, locked) don't fall back to the security tool", async () => {
+    keychain.set("whoop-mcp/client-credentials", JSON.stringify(creds));
+    const del = spyOn(Bun.secrets, "delete").mockImplementation(async () => {
+      throw new Error("User canceled the operation. (code: -128)");
+    });
+    const security = fakeSecurity(0);
+    try {
+      expect(await deleteStoredCredentials()).toBe("failed");
+      expect(security.calls).toEqual([]);
+    } finally {
+      security.restore();
+      del.mockRestore();
+    }
+  });
+
+  test("saving over another build's item removes it and saves a fresh one to the keychain", async () => {
+    keychain.set("whoop-mcp/client-credentials", JSON.stringify({ ...creds, clientId: "old-app" }));
+    let owned = false;
+    const set = spyOn(Bun.secrets, "set").mockImplementation((async (opts: { value: string }) => {
+      if (!owned) ownerError();
+      keychain.set("whoop-mcp/client-credentials", opts.value);
+    }) as typeof Bun.secrets.set);
+    const del = spyOn(Bun.secrets, "delete").mockImplementation(ownerError);
+    const security = fakeSecurity(0, () => {
+      keychain.clear();
+      owned = true;
+    });
+    try {
+      expect(await saveCredentials(creds)).toBe("keychain");
+      expect(await readStoredCredentials()).toEqual({ creds, source: "keychain" });
+      expect(await Bun.file(credentialFilePath()).exists()).toBe(false);
+    } finally {
+      security.restore();
+      del.mockRestore();
+      set.mockRestore();
+    }
+  });
+});
