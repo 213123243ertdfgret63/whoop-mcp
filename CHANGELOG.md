@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.6.0 (2026-10-29)
+
+- Delete the saved WHOOP app credentials on disconnect (c9350ef)
+- Add Connect WHOOP and Disconnect WHOOP prompts (b7d2809)
+
 ## v0.5.0 (2026-10-28)
 
 - Show the extension as "WHOOP (unofficial)" in Claude Desktop (3ef4659)
