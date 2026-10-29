@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.6.2 (2026-10-29)
+
+- Open WHOOP in a tab, list the app fields in a table, explain stale approvals (0e6c121)
+
 ## v0.6.1 (2026-10-29)
 
 - Build only the macOS bundle (9eb327b)
