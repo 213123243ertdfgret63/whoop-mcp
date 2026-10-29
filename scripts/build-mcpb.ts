@@ -17,7 +17,7 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { $ } from "bun";
 import { VERSION } from "../src/config.ts";
 import { log } from "../src/log.ts";
-import { createServer } from "../src/server.ts";
+import { createServer, PROMPTS } from "../src/server.ts";
 import { PRIVACY_URL } from "../src/setup.ts";
 
 const ROOT = join(import.meta.dir, "..");
@@ -101,6 +101,9 @@ function manifest(bundle: Bundle, tools: { name: string; description: string }[]
     server,
     tools,
     tools_generated: false,
+    // The connect and disconnect shortcuts (MCP prompts), with the same text the server returns for them.
+    prompts: PROMPTS.map(({ name, description, text }) => ({ name, description, text })),
+    prompts_generated: false,
     keywords: ["whoop", "fitness", "recovery", "sleep", "training", "health"],
     privacy_policies: [PRIVACY_URL],
     compatibility: { platforms: [bundle === "macos" ? "darwin" : "win32"] },

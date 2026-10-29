@@ -96,7 +96,8 @@ Why your own app: WHOOP's terms don't allow open-source tools to share one app, 
 Later, when the login expires, the page goes straight to WHOOP's approval screen. If WHOOP shows an error (for example about the redirect URL), the page explains it and offers **Try again** once you've fixed the app, or **Use different credentials**. To switch to another app, ask Claude to "set up WHOOP again" (`whoop_login` with `reconfigure: true`).
 
 - whoop-mcp needs every permission. If you untick one on WHOOP's page (or your app doesn't have one ticked under Scopes), it doesn't connect: it revokes that partial login and the page tells you what to fix.
-- To disconnect, ask Claude to "disconnect WHOOP". It revokes whoop-mcp's access at WHOOP and deletes the saved login; say "and forget the app" to delete the saved Client ID and Secret too.
+- Shortcuts: in Claude Desktop, click **+** → **Add from WHOOP (unofficial)** → **Connect WHOOP** or **Disconnect WHOOP**, then send the message. (They're MCP prompts named `whoop-connect` and `whoop-disconnect`; Desktop's `/` menu doesn't list MCP prompts yet, but other MCP clients show them as slash commands.)
+- To disconnect, ask Claude to "disconnect WHOOP" or use the **Disconnect WHOOP** shortcut. It revokes whoop-mcp's access at WHOOP and deletes the saved login; say "and forget the app" to delete the saved Client ID and Secret too.
 - The setup page runs only on your computer (`localhost`), behind a one-time link, and refuses requests from other websites.
 - Tokens are stored in `~/.config/whoop-mcp/tokens.json` (owner-only). The app credentials are stored in your system keychain (service `whoop-mcp`), or in a private file next to the tokens when there's no keychain.
 
@@ -153,6 +154,8 @@ Ask Claude things like "how am I today, should I train hard?", "how was my week?
 | `whoop_status`          | Connection state: app credentials, login progress, granted scopes, token expiry and server version. Makes no WHOOP API calls.                                                           |
 | `whoop_disconnect`      | Disconnects your WHOOP account: revokes access at WHOOP and deletes the saved login. `forget_app: true` also deletes the saved app credentials.                                         |
 | `whoop_login`           | Connects your account in the browser (setup page first if needed). `reconfigure: true` re-enters the app credentials.                                                                   |
+
+Shortcuts (MCP prompts, under **+** → **Add from WHOOP (unofficial)** in Claude Desktop): **Connect WHOOP** (`whoop-connect`) and **Disconnect WHOOP** (`whoop-disconnect`, keeps the saved app credentials). Each adds a message asking Claude to call the matching tool, so you see the call as usual.
 
 Dates are your local dates, and a WHOOP day runs from sleep to sleep, not midnight to midnight. Results include a `data_quality` section that says which days are missing, still being scored or calibrating. Ranges are limited to 90 days, and `raw: true` (the original WHOOP records) to 7. Nothing here is medical advice.
 

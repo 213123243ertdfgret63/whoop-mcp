@@ -135,6 +135,34 @@ describe("tools/list", () => {
   });
 });
 
+describe("prompts (connect and disconnect shortcuts)", () => {
+  test("lists whoop-connect and whoop-disconnect with titles and no arguments", async () => {
+    const { client } = await connect();
+    const { prompts } = await client.listPrompts();
+    expect(prompts.map((p) => p.name).sort()).toEqual(["whoop-connect", "whoop-disconnect"]);
+    for (const p of prompts) {
+      expect(p.arguments ?? []).toEqual([]);
+      expect(p.description).toBeTruthy();
+      expect(p.title).toMatch(/^(Connect|Disconnect) WHOOP$/);
+    }
+  });
+
+  test("each asks Claude to call its tool, and getting it calls nothing", async () => {
+    const { client, stub } = await connect();
+    const connectPrompt = await client.getPrompt({ name: "whoop-connect" });
+    const disconnectPrompt = await client.getPrompt({ name: "whoop-disconnect" });
+    const only = (r: typeof connectPrompt) => {
+      expect(r.messages).toHaveLength(1);
+      expect(r.messages[0]?.role).toBe("user");
+      return (r.messages[0]?.content as { text?: string } | undefined)?.text ?? "";
+    };
+    expect(only(connectPrompt)).toContain("whoop_login");
+    expect(only(disconnectPrompt)).toContain("whoop_disconnect");
+    expect(only(disconnectPrompt)).toContain("unless I ask");
+    expect(stub.calls).toEqual([]);
+  });
+});
+
 describe("whoop_status", () => {
   test("without a token file reports logged out, every scope missing and no expiry", async () => {
     const { client, stub } = await connect();

@@ -371,5 +371,37 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
   );
 
   registerDataTools(server, client, loginFlow);
+  registerPrompts(server);
   return server;
+}
+
+/**
+ * Shortcuts to connect and disconnect. Claude Desktop's chat lists MCP prompts under + → "Add from WHOOP
+ * (unofficial)" by title and attaches the text to the message (its / menu doesn't show them, as of 4.29); clients
+ * with prompt slash commands show /whoop-connect and /whoop-disconnect. Getting a prompt has no side effects: it
+ * only asks Claude to call the tool, so the user still sees, and can stop, the tool call. No arguments, because
+ * Desktop asks for arguments in a form before attaching the prompt.
+ */
+export const PROMPTS = [
+  {
+    name: "whoop-connect",
+    title: "Connect WHOOP",
+    description: "Connect your WHOOP account in the browser.",
+    text: "Connect my WHOOP account: call whoop_login, and while it says pending keep calling it with wait_seconds as it tells you, until it reports connected or failed. Then tell me the outcome in one sentence.",
+  },
+  {
+    name: "whoop-disconnect",
+    title: "Disconnect WHOOP",
+    description: "Disconnect your WHOOP account and delete the saved login.",
+    text: "Disconnect my WHOOP account: call whoop_disconnect (keep the saved WHOOP app credentials unless I ask to forget the app), then tell me the outcome in one sentence.",
+  },
+] as const;
+
+function registerPrompts(server: McpServer): void {
+  for (const p of PROMPTS) {
+    server.registerPrompt(p.name, { title: p.title, description: p.description }, () => {
+      log.info(`prompt ${p.name}`);
+      return { messages: [{ role: "user" as const, content: { type: "text" as const, text: p.text } }] };
+    });
+  }
 }

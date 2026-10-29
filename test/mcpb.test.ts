@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DIRNAME, LAUNCH_SH, manifest, summary } from "../scripts/build-mcpb.ts";
 import { VERSION } from "../src/config.ts";
+import { PROMPTS } from "../src/server.ts";
 
 const tools = [{ name: "whoop_today", description: "Start here." }];
 
@@ -39,6 +40,13 @@ describe("extension manifest", () => {
     // The ID Desktop derives from `name` must not change, or upgrades install next to the old extension.
     expect(m.name).toBe("whoop-mcp");
     expect(m.display_name).toBe("WHOOP (unofficial)");
+  });
+
+  test("lists the connect and disconnect prompts with the text the server returns", () => {
+    const m = manifest("macos", tools);
+    expect(m.prompts.map((p) => p.name)).toEqual(["whoop-connect", "whoop-disconnect"]);
+    expect(m.prompts.map((p) => p.text)).toEqual(PROMPTS.map((p) => p.text));
+    expect(m.prompts_generated).toBe(false);
   });
 });
 
