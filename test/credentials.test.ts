@@ -159,6 +159,22 @@ describe("deleteStoredCredentials", () => {
     }
   });
 
+  test("on macOS and Windows a failed keychain read still tries the delete", async () => {
+    keychain.set("whoop-mcp/client-credentials", JSON.stringify(creds));
+    const get = spyOn(Bun.secrets, "get").mockImplementation(async () => {
+      throw new Error("keychain locked");
+    });
+    try {
+      const expected = process.platform === "darwin" || process.platform === "win32" ? "deleted" : "none";
+      expect(await deleteStoredCredentials()).toBe(expected);
+      if (expected === "deleted") expect(keychain.size).toBe(0);
+      // Nothing there after all: a failed read followed by a delete that finds nothing is "none", not "failed".
+      expect(await deleteStoredCredentials()).toBe("none");
+    } finally {
+      get.mockRestore();
+    }
+  });
+
   test("removes credentials from both stores and reports it", async () => {
     keychain.set("whoop-mcp/client-credentials", JSON.stringify(creds));
     await writeFile(credentialFilePath(), JSON.stringify(creds));

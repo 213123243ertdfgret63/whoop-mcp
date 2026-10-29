@@ -542,6 +542,13 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
 
   /** Checks, saves and starts authorizing. Idempotent for the same credentials (double clicks, two tabs). */
   const submit = async (clientId: string, clientSecret: string): Promise<SubmitOutcome> => {
+    if (ended)
+      return {
+        ok: false,
+        field: null,
+        message: "This page has closed. Ask Claude to connect WHOOP again.",
+        status: 410,
+      };
     if (inFlight) {
       if (inFlight.clientId === clientId && sameSecret(inFlight.secret, clientSecret)) return inFlight.outcome;
       return {
@@ -580,6 +587,14 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
       authorization = null;
       setPhase("verifying");
       const result = await verifyCreds(creds);
+      // Cancelled (e.g. the user disconnected) while WHOOP was checking them: save nothing, change nothing.
+      if (ended)
+        return {
+          ok: false,
+          field: null,
+          message: "This page has closed. Ask Claude to connect WHOOP again.",
+          status: 410,
+        };
       if (result.ok === false) {
         keptSecret = clientSecret;
         setPhase("form");
@@ -597,6 +612,14 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
       }
       try {
         const saved = await save(creds);
+        // Cancelled during the save: whoever cancelled waits for this submit, then deals with what was saved.
+        if (ended)
+          return {
+            ok: false,
+            field: null,
+            message: "This page has closed. Ask Claude to connect WHOOP again.",
+            status: 410,
+          };
         submitted = { creds, saved };
       } catch (err) {
         keptSecret = clientSecret;
@@ -801,6 +824,7 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
     if (outcome.ok) return Response.redirect(outcome.authorizeUrl, 303);
     if (clientId) lastClientId = clientId;
     if (outcome.status === 409) return page("Already in progress", outcome.message, 409, "err");
+    if (outcome.status === 410) return page("This page has closed", outcome.message, 410, "err");
     if (outcome.status === 429) return page("Too many tries", outcome.message, 429, "err");
     return pageNow({ error: { field: outcome.field, message: outcome.message } });
   };
@@ -852,8 +876,9 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
   } finally {
     clearTimeout(hardTimeout);
     clearTimeout(idleTimer);
-    // A cancel waits for an exchange in flight (which then revokes instead of saving), so whoever cancelled,
-    // e.g. whoop_disconnect, can be sure no login appears afterwards.
+    // A cancel waits for a form submit or an exchange in flight (which then save nothing, or revoke), so
+    // whoever cancelled, e.g. whoop_disconnect, can be sure no credentials or login appear afterwards.
+    await (inFlight as { outcome: Promise<SubmitOutcome> } | null)?.outcome.catch(() => {});
     await (finishing as Promise<void> | null)?.catch(() => {});
     // Keep answering status for a while, so the browser tab can show how it ended; cancel stops it early.
     closing = true;

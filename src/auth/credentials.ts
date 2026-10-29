@@ -85,15 +85,19 @@ export async function saveCredentials(creds: ClientCredentials): Promise<Credent
 export async function deleteStoredCredentials(): Promise<"deleted" | "none" | "failed"> {
   let result: "deleted" | "none" | "failed" = "none";
   if (keychainEnabled()) {
-    let present = false;
+    // "unknown" when the read failed: macOS and Windows always have a keychain, so a failed read (denied,
+    // locked) may hide a saved item and the delete is tried anyway. Elsewhere it usually means there is no
+    // keychain service, so nothing is stored there.
+    let present: boolean | "unknown" = false;
     try {
       present = (await Bun.secrets.get(KEYCHAIN)) !== null;
     } catch {
-      // No usable keychain, so nothing stored there.
+      present = process.platform === "darwin" || process.platform === "win32" ? "unknown" : false;
     }
     if (present) {
       try {
-        result = (await Bun.secrets.delete(KEYCHAIN)) ? "deleted" : "failed";
+        const deleted = await Bun.secrets.delete(KEYCHAIN);
+        result = deleted ? "deleted" : present === "unknown" ? "none" : "failed";
       } catch {
         result = "failed";
       }

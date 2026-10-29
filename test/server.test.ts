@@ -158,7 +158,7 @@ describe("prompts (connect and disconnect shortcuts)", () => {
     };
     expect(only(connectPrompt)).toContain("whoop_login");
     expect(only(disconnectPrompt)).toContain("whoop_disconnect");
-    expect(only(disconnectPrompt)).toContain("unless I ask");
+    expect(only(disconnectPrompt)).not.toContain("keep_app");
     expect(stub.calls).toEqual([]);
   });
 });
@@ -844,14 +844,60 @@ describe("whoop_disconnect", () => {
     expect(await Bun.file(join(home, "tokens.json")).exists()).toBe(false);
   });
 
-  test("forget_app also deletes the saved app credentials", async () => {
+  test("deletes the saved app credentials too, by default", async () => {
     await writeTokenFile(stored);
     process.env.WHOOP_MCP_CREDENTIAL_STORE = "file";
     await writeFile(join(home, "client.json"), JSON.stringify({ clientId: "id", clientSecret: "s" }));
     const { client } = await connect(OK_RESPONSES, undefined, { revokeAccess: async () => "revoked" });
-    const result = await client.callTool({ name: "whoop_disconnect", arguments: { forget_app: true } });
+    const result = await client.callTool({ name: "whoop_disconnect", arguments: {} });
     expect(result.structuredContent).toMatchObject({ app_credentials_deleted: true });
+    expect(text(result)).toContain("setup page");
     expect(await Bun.file(join(home, "client.json")).exists()).toBe(false);
+    const status = await client.callTool({ name: "whoop_status", arguments: {} });
+    expect(status.structuredContent).toMatchObject({ app_credentials: "missing" });
+  });
+
+  test("forgets the Client ID the setup page would pre-fill", async () => {
+    await writeTokenFile(stored);
+    const flow = pageOnlyFlow();
+    let forgot = 0;
+    flow.forgetApp = () => {
+      forgot++;
+    };
+    const { client } = await connect(OK_RESPONSES, flow, { revokeAccess: async () => "revoked" });
+    await client.callTool({ name: "whoop_disconnect", arguments: {} });
+    expect(forgot).toBe(1);
+    await client.callTool({ name: "whoop_disconnect", arguments: { keep_app: true } });
+    expect(forgot).toBe(1);
+  });
+
+  test("says when environment credentials will still be used", async () => {
+    await writeTokenFile(stored);
+    process.env.WHOOP_CLIENT_ID = "env-id";
+    process.env.WHOOP_CLIENT_SECRET = "env-secret";
+    const { client } = await connect(OK_RESPONSES, undefined, { revokeAccess: async () => "revoked" });
+    const result = await client.callTool({ name: "whoop_disconnect", arguments: {} });
+    expect(text(result)).toContain("environment variables are still set");
+    expect(text(result)).not.toContain("setup page");
+  });
+
+  test("keep_app with nothing saved doesn't claim anything was kept", async () => {
+    process.env.WHOOP_MCP_CREDENTIAL_STORE = "file";
+    const { client } = await connect(OK_RESPONSES, undefined, { revokeAccess: async () => "revoked" });
+    const result = await client.callTool({ name: "whoop_disconnect", arguments: { keep_app: true } });
+    expect(text(result)).toContain("no saved WHOOP app credentials to keep");
+  });
+
+  test("keep_app keeps the saved app credentials", async () => {
+    await writeTokenFile(stored);
+    process.env.WHOOP_MCP_CREDENTIAL_STORE = "file";
+    await writeFile(join(home, "client.json"), JSON.stringify({ clientId: "id", clientSecret: "s" }));
+    const { client } = await connect(OK_RESPONSES, undefined, { revokeAccess: async () => "revoked" });
+    const result = await client.callTool({ name: "whoop_disconnect", arguments: { keep_app: true } });
+    expect(result.structuredContent).toMatchObject({ disconnected: true, app_credentials_deleted: false });
+    expect(text(result)).toContain("were kept");
+    expect(await Bun.file(join(home, "client.json")).exists()).toBe(true);
+    expect(await Bun.file(join(home, "tokens.json")).exists()).toBe(false);
   });
 
   test("with nothing connected it says so and calls nothing", async () => {

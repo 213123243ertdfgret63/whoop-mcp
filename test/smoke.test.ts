@@ -173,3 +173,58 @@ test("in serve mode it logs to its file, keeps routine lines off stderr, and exi
     await rm(logHome, { recursive: true, force: true });
   }
 });
+
+describe("logout", () => {
+  async function logout(...args: string[]) {
+    const home = await mkdtemp(join(tmpdir(), "whoop-mcp-logout-"));
+    await writeFile(join(home, "client.json"), JSON.stringify({ clientId: "id", clientSecret: "secret" }));
+    const proc = Bun.spawn(["bun", "run", ENTRY, "logout", ...args], {
+      env: {
+        PATH: process.env.PATH ?? "",
+        WHOOP_MCP_HOME: home,
+        WHOOP_MCP_CREDENTIAL_STORE: "file",
+        WHOOP_MCP_LOG_FILE: "off",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+    const appKept = await Bun.file(join(home, "client.json")).exists();
+    await rm(home, { recursive: true, force: true });
+    return { code, stderr, appKept };
+  }
+
+  test("deletes the app credentials by default", async () => {
+    const r = await logout();
+    expect(r.code).toBe(0);
+    expect(r.appKept).toBe(false);
+    expect(r.stderr).toContain("Deleted saved app credentials.");
+  });
+
+  test("--keep-app keeps them", async () => {
+    const r = await logout("--keep-app");
+    expect(r.code).toBe(0);
+    expect(r.appKept).toBe(true);
+  });
+
+  test("still accepts the old --forget-app, which now matches the default", async () => {
+    const r = await logout("--forget-app");
+    expect(r.code).toBe(0);
+    expect(r.appKept).toBe(false);
+  });
+
+  test("rejects a mistyped keep option, with or without dashes, instead of deleting anything", async () => {
+    for (const typo of ["keep-app", "--keepapp"]) {
+      const r = await logout(typo);
+      expect(r.code).toBe(2);
+      expect(r.appKept).toBe(true);
+    }
+  });
+
+  test("rejects an unknown option instead of deleting anything", async () => {
+    const r = await logout("--keep_app");
+    expect(r.code).toBe(2);
+    expect(r.appKept).toBe(true);
+    expect(r.stderr).toContain("Unknown option --keep_app");
+  });
+});

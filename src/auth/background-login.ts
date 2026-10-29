@@ -155,6 +155,11 @@ export class BackgroundLogin {
     }
   }
 
+  /** Forgets the Client ID remembered for pre-filling the setup page, after the app credentials were deleted. */
+  forgetApp(): void {
+    this.lastClientId = undefined;
+  }
+
   /**
    * Cancels the pending flow, if any, and waits until its port is free. Also closes a finished setup page that
    * is still answering status requests (its grace period), so a new login can take the port.

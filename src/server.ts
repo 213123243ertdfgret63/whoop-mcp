@@ -290,16 +290,18 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
     {
       title: "Disconnect WHOOP",
       description:
-        "Disconnect the user's WHOOP account: revokes whoop-mcp's access at WHOOP and deletes the saved login on this computer. Only when the user asks to disconnect, log out or remove WHOOP access. With forget_app, also deletes the saved WHOOP app Client ID and Secret, so connecting again starts with the setup page. Asking about WHOOP data afterwards opens the connection page again.",
+        "Disconnect the user's WHOOP account: revokes whoop-mcp's access at WHOOP and deletes the saved login on this computer. Only when the user asks to disconnect, log out or remove WHOOP access. Also deletes the saved WHOOP app Client ID and Secret, so connecting again starts with the setup page (the app still exists in the WHOOP developer dashboard; the user copies its Client ID and Secret again). Pass keep_app only when the user asks to keep the app details. Asking about WHOOP data afterwards opens the connection page again.",
       inputSchema: z.object({
-        forget_app: z
+        keep_app: z
           .boolean()
           .default(false)
-          .describe("Also delete the saved WHOOP app credentials (Client ID and Secret)."),
+          .describe(
+            "Keep the saved WHOOP app credentials (Client ID and Secret), so reconnecting skips the setup page.",
+          ),
       }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ forget_app }) => {
+    async ({ keep_app }) => {
       try {
         await loginFlow.cancel();
         // (Optional calls: tests pass a stub client.) A refresh mid-flight must save before the delete.
@@ -307,21 +309,28 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
         const hadLogin = (await readTokens()) !== null;
         const revoked = hadLogin ? ((await client.revokeAccess?.()) ?? "failed") : "not_logged_in";
         await withTokenLock(deleteTokens);
-        const forgot = forget_app ? await deleteStoredCredentials() : "none";
-        log.info("disconnected from WHOOP", { had_login: hadLogin, revoked, forget_app });
+        const forgot = keep_app ? "kept" : await deleteStoredCredentials();
+        if (forgot !== "kept") loginFlow.forgetApp?.();
+        // Env vars win over saved credentials, and disconnect can't remove them.
+        const source = await credentialSource();
+        log.info("disconnected from WHOOP", { had_login: hadLogin, revoked, app_credentials: forgot });
         const parts = [
           !hadLogin
             ? "WHOOP wasn't connected."
             : revoked === "revoked"
               ? "Disconnected from WHOOP: access was revoked at WHOOP and the saved login deleted."
               : "Deleted the saved WHOOP login, but couldn't revoke access at WHOOP (it may already have ended). The user can also remove the app's access in the WHOOP developer dashboard.",
-          !forget_app
-            ? ""
-            : forgot === "deleted"
-              ? "The saved WHOOP app credentials were deleted too."
-              : forgot === "failed"
-                ? "The saved WHOOP app credentials couldn't be removed from the keychain; the user can delete the 'whoop-mcp' item in Keychain Access."
-                : "There were no saved app credentials to delete.",
+          forgot === "kept"
+            ? source === "missing"
+              ? "There were no saved WHOOP app credentials to keep, so connecting again starts with the setup page."
+              : "The WHOOP app credentials were kept, so reconnecting goes straight to WHOOP's approval page."
+            : forgot === "failed"
+              ? "The saved WHOOP app credentials couldn't be removed from the keychain; the user can delete the 'whoop-mcp' item in Keychain Access."
+              : source === "env"
+                ? "The WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET environment variables are still set, so connecting again uses them."
+                : forgot === "deleted"
+                  ? "The saved WHOOP app credentials were deleted too, so connecting again starts with the setup page."
+                  : "There were no saved app credentials to delete.",
         ];
         return textResult(parts.filter(Boolean).join(" "), {
           disconnected: true,
@@ -392,8 +401,8 @@ export const PROMPTS = [
   {
     name: "whoop-disconnect",
     title: "Disconnect WHOOP",
-    description: "Disconnect your WHOOP account and delete the saved login.",
-    text: "Disconnect my WHOOP account: call whoop_disconnect (keep the saved WHOOP app credentials unless I ask to forget the app), then tell me the outcome in one sentence.",
+    description: "Disconnect your WHOOP account and delete the saved login and app credentials.",
+    text: "Disconnect my WHOOP account: call whoop_disconnect, then tell me the outcome in one sentence.",
   },
 ] as const;
 

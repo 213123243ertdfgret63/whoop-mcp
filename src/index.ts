@@ -25,7 +25,8 @@ Usage: whoop-mcp <command>
       --skip-verify       Don't check the credentials with WHOOP before saving
   login [--no-browser]  Log in with the browser using the saved credentials
   status                Show credential and login state
-  logout [--forget-app] Delete saved tokens (and, with --forget-app, the app credentials)
+  logout [--keep-app]   Revoke access and delete the saved login and app credentials
+                        (--keep-app keeps the app credentials)
   version               Print the version`;
 
 /** How long shutdown waits for a token refresh to save: under the 2s Claude gives between EOF and SIGTERM. */
@@ -125,7 +126,14 @@ async function main(): Promise<void> {
       return;
     }
 
-    case "logout":
+    case "logout": {
+      // --forget-app was the opt-in before deleting the app credentials became the default.
+      const unknown = rest.filter((a) => a !== "--keep-app" && a !== "--forget-app");
+      if (unknown.length) {
+        print(`Unknown option ${unknown.join(", ")}. Usage: logout [--keep-app]`);
+        process.exitCode = 2;
+        return;
+      }
       if ((await readTokens()) !== null) {
         const revoked = await new WhoopClient().revokeAccess();
         print(
@@ -136,7 +144,7 @@ async function main(): Promise<void> {
       }
       await deleteTokens();
       print(`Deleted ${tokenPath()}.`);
-      if (flag("--forget-app")) {
+      if (!flag("--keep-app")) {
         const forgot = await deleteStoredCredentials();
         print(
           forgot === "deleted"
@@ -147,6 +155,7 @@ async function main(): Promise<void> {
         );
       }
       return;
+    }
 
     case "help":
     case "--help":

@@ -322,6 +322,31 @@ describe("full flow", () => {
     await h.cancel();
   });
 
+  test("a cancel during the credential check waits for it and saves nothing", async () => {
+    const checking = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const h = await start({
+      verify: async () => {
+        checking.resolve();
+        await release.promise;
+        return { ok: true };
+      },
+    });
+    const submitted = submit(h, goodForm(h));
+    await checking.promise;
+    let cancelled = false;
+    const cancel = h.cancel().then(() => {
+      cancelled = true;
+    });
+    await Bun.sleep(20);
+    // The flow can't report itself ended while the check could still save afterwards.
+    expect(cancelled).toBe(false);
+    release.resolve();
+    await cancel;
+    await submitted.catch(() => {});
+    expect(h.saved).toEqual([]);
+  });
+
   test("cancelling stops the flow and the setup link stops working", async () => {
     const h = await start();
     await h.cancel();
