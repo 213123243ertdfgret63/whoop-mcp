@@ -110,11 +110,11 @@ main { max-width: 30rem; margin-top: 1.5rem; }
 section { background: var(--card); border-radius: 12px; padding: 1rem 1.1rem; margin: 0 0 1rem; }
 section[aria-disabled="true"] { opacity: .55; }
 .callout { border-left: 3px solid var(--accent); padding-left: .65rem; margin: .75rem 0; }
-.rows { list-style: none; padding: 0; margin: .5rem 0; }
-.rows li { display: grid; grid-template-columns: 7.5rem 1fr; gap: .5rem; align-items: start; padding: .45rem 0; border-top: 1px solid var(--line); }
-.rows li:first-child { border-top: 0; }
-.rows .label { font-weight: 600; } .rows .value { overflow-wrap: anywhere; }
-.rows li.copied .label::after { content: " ✓"; color: var(--ok); }
+.fields { width: 100%; border-collapse: collapse; margin: .5rem 0; }
+.fields th, .fields td { text-align: left; vertical-align: top; padding: .45rem .5rem .45rem 0; border-top: 1px solid var(--line); }
+.fields thead th { border-top: 0; font-size: .85rem; color: var(--muted); font-weight: 600; }
+.fields tbody th { width: 8rem; font-weight: 600; } .fields td { overflow-wrap: anywhere; }
+.fields tr.copied th::after { content: " ✓"; color: var(--ok); }
 button.copy { padding: .2rem .55rem; font-size: .85rem; margin-left: .35rem; vertical-align: baseline; }
 label { display: block; font-weight: 600; margin: .75rem 0 .25rem; }
 input { width: 100%; font: inherit; padding: .55rem .65rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
@@ -140,9 +140,8 @@ function setupPage(opts: {
   const nonce = newNonce();
   const scopes = SCOPES.filter((s) => s !== "offline");
   const copyRow = (label: string, value: string, note = "") =>
-    `<li><span class="label">${esc(label)}</span><span class="value"><code>${esc(value)}</code><button type="button" class="copy quiet" draggable="true" data-value="${esc(value)}" aria-label="Copy ${esc(label.toLowerCase())}">Copy</button>${note ? `<br><span class="small muted">${note}</span>` : ""}</span></li>`;
-  const textRow = (label: string, html: string) =>
-    `<li><span class="label">${esc(label)}</span><span class="value">${html}</span></li>`;
+    `<tr><th scope="row">${esc(label)}</th><td><code>${esc(value)}</code><button type="button" class="copy quiet" draggable="true" data-value="${esc(value)}" aria-label="Copy ${esc(label.toLowerCase())}">Copy</button>${note ? `<br><span class="small muted">${note}</span>` : ""}</td></tr>`;
+  const textRow = (label: string, html: string) => `<tr><th scope="row">${esc(label)}</th><td>${html}</td></tr>`;
   const fieldMsg = (field: "client_id" | "client_secret") =>
     opts.error && (opts.error.field === field || opts.error.field === "both")
       ? `<p id="${field}_msg" class="field-msg err">${esc(opts.error.message)}</p>`
@@ -160,12 +159,14 @@ don't let open-source tools share one app, so you make your own; only you use it
 
 <section id="s1" aria-labelledby="s1h">
   <h2 id="s1h">1. Create the app</h2>
-  <p><a id="open-whoop" class="button" href="${esc(CREATE_URL)}" target="whoop-dev" rel="noopener">Open WHOOP side by side</a></p>
+  <p><a id="open-whoop" class="button" href="${esc(CREATE_URL)}" target="_blank" rel="noopener">Open WHOOP in a new tab</a></p>
   <p class="small muted">Sign in with your WHOOP account. Already have an app? Open it instead, add the Redirect URL
   below, and skip to step 2.</p>
   <p class="callout small">First time? WHOOP asks you to create a <b>Team</b>: name it anything, e.g. <i>personal</i>.</p>
   <p>Click <b>Create App</b> and fill in:</p>
-  <ol class="rows">
+  <table class="fields">
+    <thead><tr><th scope="col">Field</th><th scope="col">What to enter</th></tr></thead>
+    <tbody>
     ${copyRow("Name", "whoop-mcp")}
     ${textRow("Logo", '<span class="muted">leave empty</span>')}
     ${textRow("Contacts", "your email address")}
@@ -173,7 +174,8 @@ don't let open-source tools share one app, so you make your own; only you use it
     ${copyRow("Redirect URLs", opts.redirectUri, "exactly this")}
     ${textRow("Scopes", `tick every box (${scopes.length}): <span class="small">${scopes.map((s) => esc(s)).join(", ")}</span>`)}
     ${textRow("Webhooks", '<span class="muted">leave empty</span>')}
-  </ol>
+    </tbody>
+  </table>
   <p>Then click <b>Create App</b> at the bottom of WHOOP's form.</p>
 </section>
 
@@ -217,7 +219,7 @@ don't let open-source tools share one app, so you make your own; only you use it
 
   const script = `
 "use strict";
-const C = ${scriptJson({ token: opts.token, createUrl: CREATE_URL, phase: opts.phase, problem: opts.problem ?? null, keptSecret: Boolean(opts.keptSecretTail) })};
+const C = ${scriptJson({ token: opts.token, phase: opts.phase, problem: opts.problem ?? null, keptSecret: Boolean(opts.keptSecretTail) })};
 const $ = (id) => document.getElementById(id);
 const id = $("client_id"), secret = $("client_secret"), statusEl = $("status");
 const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -249,20 +251,13 @@ function fieldError(field, message) {
   }
 }
 
-// Step 1: WHOOP's dashboard in a window beside this one, so values can be copied across without switching tabs.
-// noopener: pages loaded in that window must not be able to reach (and replace) this one.
-$("open-whoop").addEventListener("click", (e) => {
-  e.preventDefault();
-  const w = Math.round(screen.availWidth * 0.6), h = screen.availHeight;
-  window.open(C.createUrl, "whoop-dev", "noopener,popup,width=" + w + ",height=" + h + ",left=" + (screen.availWidth - w) + ",top=0");
-});
 const copyButtons = [...document.querySelectorAll("button.copy")];
 copyButtons.forEach((b, i) => {
   b.addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(b.dataset.value); }
     catch { const r = document.createRange(); r.selectNodeContents(b.previousElementSibling); getSelection().removeAllRanges(); getSelection().addRange(r); }
     b.textContent = "Copied ✓";
-    b.closest("li").classList.add("copied");
+    b.closest("tr").classList.add("copied");
     setTimeout(() => { b.textContent = "Copy"; }, 2000);
     copyButtons[i + 1]?.focus({ preventScroll: true });
   });
@@ -417,6 +412,9 @@ async function poll() {
     else if (Date.now() - started > 90000) $("s3help").hidden = false;
   }
 }
+// Back from WHOOP via the Back button: the browser may restore this page as it was, with an approval link the
+// server has since replaced. Load it fresh instead.
+window.addEventListener("pageshow", (e) => { if (e.persisted) location.reload(); });
 if (C.phase === "authorizing" || C.phase === "exchanging") { setStep(3); poll(); }
 else if (id.value) setStep(2);
 `;
@@ -448,7 +446,7 @@ const token = ${scriptJson(token)};
     if (s.phase === "done") {
       document.getElementById("title").textContent = "✓ WHOOP connected";
       document.getElementById("text").textContent = "Claude is continuing in the chat. You can close this tab.";
-      // Closes only a window this flow opened (the side window); a normal tab just stays.
+      // Closes only a window a script opened; a normal tab just stays.
       if (window.opener) setTimeout(() => window.close(), 1500);
       return;
     }
@@ -523,13 +521,16 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
   const setPhase = (next: SetupPhase, nextProblem?: string) => {
     phase = next;
     problem = nextProblem;
+    if (next === "authorizing") clearTimeout(idleTimer); // see touch()
     opts.onPhase?.(phase, problem);
   };
 
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   const touch = () => {
     clearTimeout(idleTimer);
-    if (phase === "done" || phase === "failed") return;
+    // While approving, the user is on WHOOP's pages (sign-in, two-factor), which this server can't see; the
+    // overall timeout still ends an abandoned approval.
+    if (phase === "done" || phase === "failed" || phase === "authorizing") return;
     idleTimer = setTimeout(() => end(new Error("The WHOOP setup page wasn't used for a while, so it closed.")), idleMs);
   };
 
@@ -708,7 +709,8 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
           : page("Not ready", "Finish the setup page first.", 409, "err");
       }
       const outcome = parseCallback(url, authorization.state);
-      if (outcome.kind === "wrong-state") return wrongStatePage();
+      // Changes nothing: any web page can send a browser here.
+      if (outcome.kind === "wrong-state") return wrongStatePage(url);
       if (closing) return finishingPage(token);
       touch();
       if (outcome.kind === "code") {

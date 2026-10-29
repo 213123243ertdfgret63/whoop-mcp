@@ -267,6 +267,35 @@ describe("full flow", () => {
     expect(h.exchanged.map((e) => e.code)).toEqual(["real"]);
   });
 
+  test("an approval from an earlier try is explained and changes nothing", async () => {
+    const h = await start();
+    const res = await submit(h, goodForm(h));
+    const state = new URL(res.headers.get("location") ?? "").searchParams.get("state");
+    const old = await fetch(`${h.base}/callback?code=old&state=from-an-earlier-run`);
+    expect(old.status).toBe(400);
+    const text = await old.text();
+    expect(text).toContain("earlier try");
+    expect(text).not.toContain("from-an-earlier-run");
+    // Any web page can send a browser here, so the flow must look exactly as before.
+    const status = (await (
+      await fetch(`${h.base}/setup/status`, { headers: { "X-Setup-Token": h.token } })
+    ).json()) as { phase: string; problem?: string | null };
+    expect(status.phase).toBe("authorizing");
+    expect(status.problem ?? null).toBeNull();
+    await fetch(`${h.base}/callback?code=real&state=${state}`);
+    expect((await h.result).tokens).toEqual(TOKENS);
+    expect(h.exchanged.map((e) => e.code)).toEqual(["real"]);
+  });
+
+  test("the idle timeout doesn't run while the user is approving on WHOOP's pages", async () => {
+    const h = await start({ idleTimeoutMs: 150, timeoutMs: 5000 });
+    const res = await submit(h, goodForm(h));
+    const state = new URL(res.headers.get("location") ?? "").searchParams.get("state");
+    await Bun.sleep(400); // well past the idle timeout, with no requests to this server
+    await fetch(`${h.base}/callback?code=real&state=${state}`);
+    expect((await h.result).tokens).toEqual(TOKENS);
+  });
+
   test("an error from WHOOP keeps the flow alive: the page explains it and Try again starts a new approval", async () => {
     const phases: [string, string | undefined][] = [];
     const h = await start({ onPhase: (p, problem) => phases.push([p, problem]) });
@@ -589,11 +618,16 @@ describe("review fixes", () => {
     await h.cancel();
   });
 
-  test("the side window is opened without a link back to this page", async () => {
+  test("WHOOP opens in a new tab without a link back to this page, and the fields are a table", async () => {
     const h = await start();
     const html = await (await fetch(h.setupUrl)).text();
-    expect(html).toContain('rel="noopener"');
-    expect(html).toContain('"noopener,popup');
+    expect(html).toMatch(/id="open-whoop"[^>]*target="_blank" rel="noopener"/);
+    expect(html).not.toContain("popup");
+    expect(html).not.toContain("window.open");
+    expect(html).toContain('<table class="fields">');
+    for (const field of ["Name", "Logo", "Contacts", "Privacy Policy", "Redirect URLs", "Scopes", "Webhooks"]) {
+      expect(html).toContain(`<th scope="row">${field}</th>`);
+    }
     await h.cancel();
   });
 });

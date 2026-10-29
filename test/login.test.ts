@@ -106,7 +106,7 @@ describe("login()", () => {
     const res = await callback({ code: "forged", state: `${state}x` });
     expect(res.status).toBe(400);
     expect(res.headers.get("content-type")).toContain("text/html");
-    expect(await res.text()).toContain("belong to the WHOOP login in progress");
+    expect(await res.text()).toContain("came from an earlier try");
     expect(tokenRequests).toHaveLength(0);
     // The real callback still completes the login afterwards.
     await callback({ code: "auth-code", state });

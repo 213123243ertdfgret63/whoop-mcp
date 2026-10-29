@@ -75,7 +75,7 @@ Your WHOOP login and app credentials are kept and work with the extension.
 
 Just ask Claude something about your WHOOP data, such as "how did I sleep?" (or say "connect WHOOP"). If WHOOP isn't connected yet, whoop-mcp opens a page in your browser, and Claude waits and carries on with your question once you're done. You don't need to tell Claude you've finished.
 
-1. **First time (about 5 minutes):** the page walks you through creating a free app at the [WHOOP developer dashboard](https://developer-dashboard.whoop.com). **Open WHOOP side by side** puts the dashboard next to the page, and every value has a Copy button:
+1. **First time (about 5 minutes):** the page walks you through creating a free app at the [WHOOP developer dashboard](https://developer-dashboard.whoop.com). **Open WHOOP in a new tab** opens the dashboard, and the page lists every value in a table with Copy buttons:
 
    | Field          | Value                                                                          |
    | -------------- | ------------------------------------------------------------------------------ |

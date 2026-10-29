@@ -83,13 +83,25 @@ export function parseCallback(url: URL, state: string): CallbackOutcome {
   return { kind: "code", code: params.code };
 }
 
-export const wrongStatePage = () =>
-  page(
+/**
+ * WHOOP came back with an approval this login didn't start: usually a WHOOP tab left open from an earlier try.
+ * Logged without the URL's values (they're single-use codes and states).
+ */
+export function wrongStatePage(
+  url: URL,
+  advice = "Approve in the WHOOP tab Claude opened most recently. If it's gone, ask Claude for the WHOOP connection link again.",
+): Response {
+  log.warn("WHOOP returned an approval this login didn't start", {
+    has_code: url.searchParams.has("code"),
+    has_error: url.searchParams.has("error"),
+  });
+  return page(
     "Not this login",
-    "This link doesn't belong to the WHOOP login in progress. Use the page Claude opened, or start the login again.",
+    `This WHOOP approval came from an earlier try, so it can't be used. ${advice}`,
     400,
     "err",
   );
+}
 
 /** Validates a localhost redirect URI and returns where to listen. */
 export function parseRedirect(redirectUri: string): URL {
@@ -165,7 +177,7 @@ export function oauthCallback(state: string) {
     const outcome = parseCallback(url, state);
     switch (outcome.kind) {
       case "wrong-state":
-        return wrongStatePage();
+        return wrongStatePage(url);
       case "error": {
         const detail = `${outcome.error}${outcome.description ? ` — ${outcome.description}` : ""}`;
         reject(new Error(`Authorization failed: ${detail}`));
