@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.6.1 (2026-10-29)
+
+- Build only the macOS bundle (9eb327b)
+- Delete keychain items saved by an earlier build (3c3a066)
+
 ## v0.6.0 (2026-10-29)
 
 - Delete the saved WHOOP app credentials on disconnect (c9350ef)
