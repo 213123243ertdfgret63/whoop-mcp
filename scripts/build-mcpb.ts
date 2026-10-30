@@ -71,7 +71,12 @@ function manifest(tools: { name: string; description: string }[]) {
   const server = {
     type: "binary",
     entry_point: "server/launch.sh",
-    mcp_config: { command: "/bin/sh", args: [`${DIRNAME}/server/launch.sh`] },
+    mcp_config: {
+      command: "/bin/sh",
+      args: [`${DIRNAME}/server/launch.sh`],
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: an mcpb placeholder, not a template literal
+      env: { WHOOP_MCP_INSTALL_SKILLS: "${user_config.claude_code_commands}" },
+    },
   };
   return {
     manifest_version: "0.3",
@@ -89,9 +94,20 @@ function manifest(tools: { name: string; description: string }[]) {
     support: `${REPO}/issues`,
     icon: "icon.png",
     server,
+    // Read by skills.ts: adds /whoop-connect, /whoop-disconnect and /whoop-status to Claude Code's / menu.
+    user_config: {
+      claude_code_commands: {
+        type: "boolean",
+        title: "Add /whoop- commands to Claude Code",
+        description:
+          "Adds /whoop-connect, /whoop-disconnect and /whoop-status to the / menu in Claude Code, including Desktop's Code tab, as skills in ~/.claude/skills. Turning it off removes them the next time the extension starts. Uninstalling doesn't remove them: delete the whoop-* folders in ~/.claude/skills.",
+        default: true,
+        required: false,
+      },
+    },
     tools,
     tools_generated: false,
-    // The connect and disconnect shortcuts (MCP prompts), with the same text the server returns for them.
+    // The connect, disconnect and status shortcuts (MCP prompts), with the same text the server returns for them.
     prompts: PROMPTS.map(({ name, description, text }) => ({ name, description, text })),
     prompts_generated: false,
     keywords: ["whoop", "fitness", "recovery", "sleep", "training", "health"],

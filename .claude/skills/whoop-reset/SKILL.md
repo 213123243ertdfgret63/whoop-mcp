@@ -35,7 +35,8 @@ In order, it:
    - `~/Library/Logs/whoop-mcp`;
    - Claude Desktop's `mcp-server-*whoop*` logs;
    - Claude Code's `mcp-logs-*whoop*` caches;
-   - `~/.claude/plugins/cache/whoop-mcp`.
+   - `~/.claude/plugins/cache/whoop-mcp`;
+   - the extension's `/whoop-connect`, `/whoop-disconnect` and `/whoop-status` skills in `~/.claude/skills`, only where `SKILL.md` carries the extension's marker. A same-named skill of the user's own is reported as **kept**.
 5. Removes the Claude Desktop extension: its folder, its settings file and its entry in `extensions-installations.json`.
 
 ## 3. Check and report
@@ -47,7 +48,7 @@ Report each item from the `--yes` output by its label:
 - **pending**: Claude Desktop is running, so the extension is removed when Desktop quits. Desktop keeps its extension list in memory and would write the entry back. Tell the user to quit Claude Desktop with ⌘Q. Quitting also ends this session. A background job then finishes the removal once Desktop has stayed closed for 3 seconds, and they can reopen Desktop. Its output is in `$TMPDIR/whoop-reset.log`. A restart to update doesn't count as quitting. Not quitting within an hour cancels the job; running the skill again starts a new one. For a removal without quitting, they can click **Uninstall** under **Settings → Extensions → WHOOP (unofficial)**, then run the skill again.
 - **FAILED**: give the note, which says what to do by hand.
 - **skipped**: `WHOOP_MCP_HOME` points at a folder not named `whoop-mcp`, so it was left alone on purpose. The note says what to delete by hand.
-- **kept**: the downloaded installers, which are left alone unless the user asked.
+- **kept**: the downloaded installers, which are left alone unless the user asked, and any `whoop-*` skill the user wrote themselves.
 
 When removal is pending, say plainly not to use WHOOP until Desktop has quit. The extension is still enabled until then, and a WHOOP request would start it again.
 

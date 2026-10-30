@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { skills } from "../src/skills.ts";
 
 // The reset script runs as a subprocess against a temporary HOME, with a fake `security` that keeps its "keychain"
 // in a file, so neither the real keychain nor the real Claude Desktop is touched. Every test checks the dry run
@@ -70,6 +71,16 @@ async function seed({ keychainItems = 1 } = {}) {
     JSON.stringify({ extensions: { [EXTENSION_ID]: { version: "0.6.2" }, "local.other": { version: "1.0.0" } } }),
   );
   await put(join(home, "Downloads", "whoop-mcp-macos (1).mcpb"), "zip");
+  // The extension's /whoop-* skills, except whoop-status, which here is the user's own and must survive.
+  await putSkills(["whoop-connect", "whoop-disconnect"]);
+  await put(join(home, ".claude", "skills", "whoop-status", "SKILL.md"), "---\nname: whoop-status\n---\nmine\n");
+}
+
+/** The skills exactly as the extension writes them. */
+async function putSkills(names: string[]) {
+  for (const s of skills()) {
+    if (names.includes(s.name)) await put(join(home, ".claude", "skills", s.name, "SKILL.md"), s.content);
+  }
 }
 
 async function run(args: string[], { desktopRunning = false, env = {} as Record<string, string>, json = true } = {}) {
@@ -149,6 +160,8 @@ describe("whoop-reset skill", () => {
     expect(await exists(home, "Library", "Logs", "Claude", "mcp-server-whoop.log")).toBe(false);
     expect(await dirExists(home, "Library", "Caches", "claude-cli-nodejs", "-Users-x", "mcp-logs-whoop")).toBe(false);
     expect(await dirExists(home, ".claude", "plugins", "cache", "whoop-mcp")).toBe(false);
+    expect(await dirExists(home, ".claude", "skills", "whoop-connect")).toBe(false);
+    expect(await dirExists(home, ".claude", "skills", "whoop-disconnect")).toBe(false);
     expect(await dirExists(support(), "Claude Extensions", EXTENSION_ID)).toBe(false);
     expect(await exists(support(), "Claude Extensions Settings", `${EXTENSION_ID}.json`)).toBe(false);
     // Both keychain items are gone.
@@ -161,6 +174,9 @@ describe("whoop-reset skill", () => {
     expect(await exists(home, "Library", "Logs", "Claude", "mcp-server-other.log")).toBe(true);
     expect(await exists(home, "Downloads", "whoop-mcp-macos (1).mcpb")).toBe(true);
     expect(report.items.find((i) => i.what === "downloaded installer")?.status).toBe("kept");
+    // A whoop-status skill the extension didn't write is the user's own.
+    expect(await readFile(join(home, ".claude", "skills", "whoop-status", "SKILL.md"), "utf8")).toContain("mine");
+    expect(report.items.find((i) => i.path?.endsWith("/skills/whoop-status"))?.status).toBe("kept");
 
     const again = await run(["--yes"]);
     expect(again.report.items.filter((i) => i.status !== "kept")).toEqual([]);
@@ -188,8 +204,20 @@ describe("whoop-reset skill", () => {
     ).toContain(EXTENSION_ID);
     expect(await dirExists(home, ".config", "whoop-mcp")).toBe(false);
 
-    // What the background job runs once Desktop has quit.
-    const finish = await run(["--finish-extension"]);
+    expect(await dirExists(home, ".claude", "skills", "whoop-connect")).toBe(false);
+
+    // The extension, still running until Desktop quits, writes its skills again when it restarts...
+    await putSkills(["whoop-connect"]);
+    // An empty folder, and one in a CLAUDE_CONFIG_DIR the extension wrote to, count too.
+    await mkdir(join(home, ".claude", "skills", "whoop-disconnect"), { recursive: true });
+    await put(join(home, "alt", "skills", "whoop-status", "SKILL.md"), skills()[2]?.content ?? "");
+    // ...so what the background job runs once Desktop has quit removes them too.
+    const finish = await run(["--finish-extension"], { env: { CLAUDE_CONFIG_DIR: join(home, "alt") } });
+    expect(await dirExists(home, ".claude", "skills", "whoop-connect")).toBe(false);
+    expect(await dirExists(home, ".claude", "skills", "whoop-disconnect")).toBe(false);
+    expect(await dirExists(home, "alt", "skills", "whoop-status")).toBe(false);
+    // The user's own whoop-status in ~/.claude stays.
+    expect(await dirExists(home, ".claude", "skills", "whoop-status")).toBe(true);
     expect(finish.code).toBe(0);
     expect(await dirExists(support(), "Claude Extensions", EXTENSION_ID)).toBe(false);
     const registry = JSON.parse(await readFile(join(support(), "extensions-installations.json"), "utf8"));

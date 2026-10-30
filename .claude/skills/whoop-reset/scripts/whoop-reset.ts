@@ -22,6 +22,9 @@ import { basename, join, resolve } from "node:path";
 const EXTENSION_ID = "local.mcpb.whoop-mcp-contributors.whoop-mcp";
 const KEYCHAIN_SERVICE = "whoop-mcp";
 const SECURITY_NOT_FOUND = 44;
+/** Must match MARKER in src/skills.ts. */
+const SKILL_MARKER = "<!-- Installed by the WHOOP (unofficial) Claude Desktop extension (whoop-mcp). -->";
+const SKILL_TEMP = /^\.SKILL\.md\.\d+\.tmp$/;
 const REPO = join(import.meta.dir, "..", "..", "..", "..");
 
 const args = new Set(process.argv.slice(2));
@@ -239,9 +242,42 @@ echo "Claude Desktop didn't quit within an hour; run the whoop-reset skill again
   });
 }
 
+/**
+ * The /whoop-* Claude Code skills the extension installs. Only folders carrying its marker: a skill of the user's
+ * own with the same name stays. Also run when the deferred extension removal finishes, since the extension
+ * writes them again whenever it starts.
+ */
+async function removeSkills() {
+  // Desktop, started from the Dock, may not pass on a CLAUDE_CONFIG_DIR set in the shell, so look in both places.
+  const roots = new Set([join(home, ".claude", "skills")]);
+  const configured = process.env.CLAUDE_CONFIG_DIR?.trim();
+  if (configured) roots.add(join(resolve(configured), "skills"));
+  for (const root of roots) {
+    for (const name of ["whoop-connect", "whoop-disconnect", "whoop-status"]) {
+      const folder = join(root, name);
+      if (!existsSync(folder)) continue;
+      // The same test as ours() in src/skills.ts: the marker, or no SKILL.md and only the extension's temp files.
+      let text: string | null = null;
+      try {
+        text = readFileSync(join(folder, "SKILL.md"), "utf8");
+      } catch {}
+      const leftovers = text === null && matching(folder, () => true).every((f) => SKILL_TEMP.test(basename(f)));
+      if (leftovers || text?.includes(SKILL_MARKER)) await removePath("Claude Code skill from the extension", folder);
+      else
+        add({
+          what: "Claude Code skill not from the extension",
+          path: folder,
+          status: "kept",
+          note: "yours; left alone",
+        });
+    }
+  }
+}
+
 async function main() {
   if (args.has("--finish-extension")) {
     await removeExtension();
+    await removeSkills();
     return print();
   }
   stopExtension();
@@ -256,6 +292,7 @@ async function main() {
     for (const f of matching(project, (n) => /^mcp-logs-.*whoop/i.test(n))) await removePath("Claude Code MCP log", f);
   }
   await removePath("Claude Code plugin cache", join(home, ".claude", "plugins", "cache", "whoop-mcp"));
+  await removeSkills();
   if (desktopRunning()) deferExtension();
   else await removeExtension();
   for (const f of matching(join(home, "Downloads"), (n) => /^whoop-mcp.*\.mcpb$/i.test(n))) {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { BackgroundLogin } from "../src/auth/background-login.ts";
 import { ConfigError, SCOPES, VERSION } from "../src/config.ts";
-import { createServer } from "../src/server.ts";
+import { createServer, PROMPTS } from "../src/server.ts";
 import { NotLoggedInError, WhoopApiError, type WhoopClient } from "../src/whoop/client.ts";
 import { addDays, cycleDate, todayLocal } from "../src/whoop/data.ts";
 import { cycle, recovery, sleep, workout } from "./fixtures.ts";
@@ -135,31 +135,41 @@ describe("tools/list", () => {
   });
 });
 
-describe("prompts (connect and disconnect shortcuts)", () => {
-  test("lists whoop-connect and whoop-disconnect with titles and no arguments", async () => {
+describe("prompts (connect, disconnect and status shortcuts)", () => {
+  test("lists whoop-connect, whoop-disconnect and whoop-status with titles and no arguments", async () => {
     const { client } = await connect();
     const { prompts } = await client.listPrompts();
-    expect(prompts.map((p) => p.name).sort()).toEqual(["whoop-connect", "whoop-disconnect"]);
+    expect(prompts.map((p) => p.name).sort()).toEqual(["whoop-connect", "whoop-disconnect", "whoop-status"]);
     for (const p of prompts) {
       expect(p.arguments ?? []).toEqual([]);
       expect(p.description).toBeTruthy();
-      expect(p.title).toMatch(/^(Connect|Disconnect) WHOOP$/);
+      expect(p.title).toMatch(/^(Connect WHOOP|Disconnect WHOOP|WHOOP status)$/);
     }
   });
 
   test("each asks Claude to call its tool, and getting it calls nothing", async () => {
     const { client, stub } = await connect();
-    const connectPrompt = await client.getPrompt({ name: "whoop-connect" });
-    const disconnectPrompt = await client.getPrompt({ name: "whoop-disconnect" });
-    const only = (r: typeof connectPrompt) => {
+    const text = async (name: string) => {
+      const r = await client.getPrompt({ name });
       expect(r.messages).toHaveLength(1);
       expect(r.messages[0]?.role).toBe("user");
       return (r.messages[0]?.content as { text?: string } | undefined)?.text ?? "";
     };
-    expect(only(connectPrompt)).toContain("whoop_login");
-    expect(only(disconnectPrompt)).toContain("whoop_disconnect");
-    expect(only(disconnectPrompt)).not.toContain("keep_app");
+    expect(await text("whoop-connect")).toContain("whoop_login");
+    const disconnect = await text("whoop-disconnect");
+    expect(disconnect).toContain("whoop_disconnect");
+    expect(disconnect).not.toContain("keep_app");
+    expect(await text("whoop-status")).toContain("whoop_status");
     expect(stub.calls).toEqual([]);
+  });
+
+  test("each names a tool the server has", async () => {
+    const { client } = await connect();
+    const names = new Set((await client.listTools()).tools.map((t) => t.name));
+    for (const p of PROMPTS) {
+      expect(names.has(p.tool)).toBe(true);
+      expect(p.text).toContain(p.tool);
+    }
   });
 });
 

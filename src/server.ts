@@ -385,10 +385,11 @@ export function createServer(client = new WhoopClient(), loginFlow = new Backgro
 }
 
 /**
- * Shortcuts to connect and disconnect. Claude Desktop's chat lists MCP prompts under + → "Add from WHOOP
- * (unofficial)" by title and attaches the text to the message (its / menu doesn't show them, as of 4.29); clients
- * with prompt slash commands show /whoop-connect and /whoop-disconnect. Getting a prompt has no side effects: it
- * only asks Claude to call the tool, so the user still sees, and can stop, the tool call. No arguments, because
+ * Shortcuts to connect, disconnect and check the connection. Claude Desktop's chat lists MCP prompts under + →
+ * "Add from WHOOP (unofficial)" by title and attaches the text to the message (its / menu doesn't show them, as of
+ * 4.29); clients with prompt slash commands list them there. The same text becomes the /whoop-connect,
+ * /whoop-disconnect and /whoop-status Claude Code skills (skills.ts). Getting a prompt has no side effects: it only
+ * asks Claude to call the tool, so the user still sees, and can stop, the tool call. No arguments, because
  * Desktop asks for arguments in a form before attaching the prompt.
  */
 export const PROMPTS = [
@@ -396,13 +397,22 @@ export const PROMPTS = [
     name: "whoop-connect",
     title: "Connect WHOOP",
     description: "Connect your WHOOP account in the browser.",
+    tool: "whoop_login",
     text: "Connect my WHOOP account: call whoop_login, and while it says pending keep calling it with wait_seconds as it tells you, until it reports connected or failed. Then tell me the outcome in one sentence.",
   },
   {
     name: "whoop-disconnect",
     title: "Disconnect WHOOP",
     description: "Disconnect your WHOOP account and delete the saved login and app credentials.",
+    tool: "whoop_disconnect",
     text: "Disconnect my WHOOP account: call whoop_disconnect, then tell me the outcome in one sentence.",
+  },
+  {
+    name: "whoop-status",
+    title: "WHOOP status",
+    description: "Check whether your WHOOP account is connected.",
+    tool: "whoop_status",
+    text: "Check my WHOOP connection: call whoop_status, then tell me in one sentence whether it's connected, and if it isn't, what to do next.",
   },
 ] as const;
 

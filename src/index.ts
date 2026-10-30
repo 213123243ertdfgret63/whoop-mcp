@@ -8,6 +8,7 @@ import { ConfigError, VERSION } from "./config.ts";
 import { errorFields, log } from "./log.ts";
 import { createServer } from "./server.ts";
 import { loginAndSave, runSetup } from "./setup.ts";
+import { syncSkills } from "./skills.ts";
 import { WhoopClient } from "./whoop/client.ts";
 
 const [command = "serve", ...rest] = process.argv.slice(2);
@@ -75,6 +76,8 @@ async function main(): Promise<void> {
         serveStdio(() => createServer(client, loginFlow), {
           onerror: (err) => log.warn("transport error", errorFields(err)),
         });
+        // The /whoop-* Claude Code skills, when the Desktop extension's setting asks for them. Never fails.
+        void syncSkills();
         const shutdown = stopper(loginFlow, client);
         // However the connection ends, close the login page's server (port 8787) and exit: something (that
         // server, a timer, a keep-alive socket) could otherwise keep this process alive after Claude is gone.

@@ -96,7 +96,7 @@ Why your own app: WHOOP's terms don't allow open-source tools to share one app, 
 Later, when the login expires, the page goes straight to WHOOP's approval screen. If WHOOP shows an error (for example about the redirect URL), the page explains it and offers **Try again** once you've fixed the app, or **Use different credentials**. To switch to another app, ask Claude to "set up WHOOP again" (`whoop_login` with `reconfigure: true`).
 
 - whoop-mcp needs every permission. If you untick one on WHOOP's page (or your app doesn't have one ticked under Scopes), it doesn't connect: it revokes that partial login and the page tells you what to fix.
-- Shortcuts: in Claude Desktop, click **+** → **Add from WHOOP (unofficial)** → **Connect WHOOP** or **Disconnect WHOOP**, then send the message. (They're MCP prompts named `whoop-connect` and `whoop-disconnect`; Desktop's `/` menu doesn't list MCP prompts yet, but other MCP clients show them as slash commands.)
+- Shortcuts: in Claude Code, including Claude Desktop's Code tab, type `/whoop-connect`, `/whoop-disconnect` or `/whoop-status`. In Desktop's chat, click **+** → **Add from WHOOP (unofficial)** → **Connect WHOOP**, **Disconnect WHOOP** or **WHOOP status**, then send the message (chat's `/` menu doesn't list extension shortcuts). See [Shortcuts](#shortcuts).
 - To disconnect, ask Claude to "disconnect WHOOP" or use the **Disconnect WHOOP** shortcut. It revokes whoop-mcp's access at WHOOP and deletes the saved login and the app's Client ID and Secret from your keychain. Connecting again starts with the setup page, where you paste the Client ID and Secret from the WHOOP developer dashboard again (the app itself stays there). Say "but keep the app" to keep them.
 - The setup page runs only on your computer (`localhost`), behind a one-time link, and refuses requests from other websites.
 - Tokens are stored in `~/.config/whoop-mcp/tokens.json` (owner-only). The app credentials are stored in your system keychain (service `whoop-mcp`), or in a private file next to the tokens when there's no keychain.
@@ -120,9 +120,10 @@ It rotates at 5 MB and keeps three old files. `whoop_status` reports the path. W
 ## Uninstall
 
 1. Ask Claude to "disconnect WHOOP" first: that revokes access at WHOOP and deletes the saved login and app credentials. Then, in Claude Desktop, open **Settings → Extensions**, choose **WHOOP (unofficial)** and click **Uninstall**.
-2. To also delete your saved WHOOP login, app credentials and logs:
+2. Uninstalling doesn't remove the Claude Code shortcuts (Desktop doesn't tell the extension). To also delete them, your saved WHOOP login, app credentials and logs:
 
    ```bash
+   rm -rf ~/.claude/skills/whoop-connect ~/.claude/skills/whoop-disconnect ~/.claude/skills/whoop-status
    rm -rf ~/.config/whoop-mcp ~/Library/Logs/whoop-mcp
    security delete-generic-password -s whoop-mcp
    ```
@@ -150,7 +151,15 @@ Ask Claude things like "how am I today, should I train hard?", "how was my week?
 | `whoop_disconnect`      | Disconnects your WHOOP account: revokes access at WHOOP and deletes the saved login and app credentials. `keep_app: true` keeps the app credentials.                                    |
 | `whoop_login`           | Connects your account in the browser (setup page first if needed). `reconfigure: true` re-enters the app credentials.                                                                   |
 
-Shortcuts (MCP prompts, under **+** → **Add from WHOOP (unofficial)** in Claude Desktop): **Connect WHOOP** (`whoop-connect`) and **Disconnect WHOOP** (`whoop-disconnect`). Each adds a message asking Claude to call the matching tool, so you see the call as usual.
+### Shortcuts
+
+| Claude Code `/` menu | Desktop chat (**+** → **Add from WHOOP (unofficial)**) | Calls              |
+| -------------------- | ------------------------------------------------------ | ------------------ |
+| `/whoop-connect`     | **Connect WHOOP**                                      | `whoop_login`      |
+| `/whoop-disconnect`  | **Disconnect WHOOP**                                   | `whoop_disconnect` |
+| `/whoop-status`      | **WHOOP status**                                       | `whoop_status`     |
+
+Each asks Claude to call the matching tool, so you see the call as usual. In chat they're MCP prompts. For Claude Code the extension writes them as skills to `~/.claude/skills/whoop-connect`, `whoop-disconnect` and `whoop-status` when it starts (new Code sessions pick them up). It only changes folders it wrote itself, marked inside `SKILL.md`, so a skill of your own with the same name is left alone. To stop it, turn off **Add /whoop- commands to Claude Code** in the extension's settings (**Settings → Extensions → WHOOP (unofficial)**): the next start removes them. If they're still there, or after uninstalling, delete them by hand (see [Uninstall](#uninstall)).
 
 Dates are your local dates, and a WHOOP day runs from sleep to sleep, not midnight to midnight. Results include a `data_quality` section that says which days are missing, still being scored or calibrating. Ranges are limited to 90 days, and `raw: true` (the original WHOOP records) to 7. Nothing here is medical advice.
 
