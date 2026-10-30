@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.0 (2026-10-30)
+
+- Add /whoop-connect, /whoop-disconnect and /whoop-status to Claude Code (168a6e8)
+- Add /whoop-reset skill to wipe whoop-mcp for clean testing (838a37a)
+
 ## v0.6.2 (2026-10-29)
 
 - Open WHOOP in a tab, list the app fields in a table, explain stale approvals (0e6c121)
