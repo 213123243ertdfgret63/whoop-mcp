@@ -65,6 +65,17 @@ What has to move off Bun: 20 `bun:test` files (`spyOn`, plus 14 `Bun.serve` fake
 - **F3b.** Manifest gaps: light and dark `icons`, and a minimum `compatibility.claude_desktop`. `privacy_policies` is already set, but it points at a README section; write a real `PRIVACY.md` (what goes to WHOOP, what the model sees, what's stored: the tokens file and app credentials) and point to that. **S. Recommend.**
 - **F3c.** Sign the bundle with `mcpb sign`. **Blocked:** Desktop refuses bundles signed by mcpb 2.1.2 (mcpb#278), which is why they're unsigned today. **Later**, once that's fixed.
 - **F3d.** Windows build. Same bundle; `compatibility.platforms` (hard-coded to `darwin` today) gains `win32`; credentials use the 0600 file store (`WHOOP_MCP_CREDENTIAL_STORE=file` already exists) or Windows Credential Manager later; check the existing `explorer` opener with URLs that carry a query string; reword the macOS-only text ("Keychain Access" messages, the log path in the long description). **M. Optional**, only if you want Windows users.
+- **F3e. An npm package, alongside or instead of the `.mcpb`.** This is how most other WHOOP servers ship, for example izqui/whoop-mcp: the user adds `"command": "npx", "args": ["-y", "whoop-mcp"]` to `claude_desktop_config.json`, or runs `claude mcp add whoop -- npx -y <package>` in Claude Code. That one takes a pasted `WHOOP_ACCESS_TOKEN`, which expires within about an hour and is never refreshed, so it isn't a model for login. Ours wouldn't change there: login already runs in chat through `whoop_login` and the setup page, and the keychain items belong to `/usr/bin/security` whatever launches the server, so the same code works from `npx`.
+
+  |                            | (a) `.mcpb` only (today)                            | (b) `.mcpb` + npm                     | (c) npm only                                                              |
+  | -------------------------- | --------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------- |
+  | Desktop chat               | Double-click install, built-in Node, install dialog | Same                                  | Edit the config JSON by hand; needs the user's own Node on Desktop's PATH |
+  | Claude Code, other clients | Point at the unpacked bundle by hand                | One `claude mcp add` line             | Same                                                                      |
+  | Updates                    | User downloads each release                         | Bundle as today; npm pinned or latest | `npx -y` with no version fetches the latest on every launch               |
+  | Release work               | Build, (later) sign, upload the bundle              | Both                                  | `npm publish` only; no manifest, icons, F3b or F3c                        |
+  | Risks                      | mcpb#278 blocks signing                             | Two channels to keep in step          | Supply chain: an npm account takeover reaches every user on next launch   |
+
+  Notes for (b) and (c): the name `whoop-mcp` is taken on npm (izqui's package), so it needs a scoped name; publish from GitHub Actions with npm trusted publishing and provenance, and document a pinned version (`npx -y <package>@1.2.3`) rather than latest; the `bin` entry runs `serve`. Needs F2 (Node-only) first, since the package is the same `server/index.mjs`. **S once F2 is done. Recommend (b):** the `.mcpb` stays the easy path for Desktop chat, and npm gives Claude Code users a one-line install. Pick (c) if you'd rather drop bundle and signing work and accept a config-file install in Desktop.
 
 ### F4. Shape of the tool surface
 
@@ -297,6 +308,7 @@ Rough size if you take every "Keep" and "yes": steps 0–8 about 3 weeks of focu
 - WHOOP's terms on reading the user's own export, and what "WHOOP Data owner" means in §4.2. (N7, N14.)
 - Does WHOOP's Cloudflare accept Node's default User-Agent and a `whoop-mcp/<version>` one? (A5.)
 - MCP App sizing and behaviour in Desktop: test with a stub before committing to N1.
+- Does Claude Desktop find a Homebrew `npx` (`/opt/homebrew/bin`) when launching a config-file server, or does the config need the absolute path? (F3e.)
 
 ## Decision sheet
 
@@ -309,6 +321,7 @@ Fill in **Your pick**: keep, change, cut, later (or a note). Blank means "go wit
 | F3b     | Manifest: icons, min Desktop version, real privacy page                                       | Yes                                |           |
 | F3c     | Sign the bundle                                                                               | Later (blocked by mcpb#278)        |           |
 | F3d     | Windows build                                                                                 | Optional                           |           |
+| F3e     | Distribution: `.mcpb` only (a), `.mcpb` + npm (b), npm only (c)                               | b                                  |           |
 | F4      | Tools: keep 14 (a), merge trends+baselines to 13 (b), also fold profile into status to 12 (c) | b                                  |           |
 | F5      | Skills: write files (a), prompts only (b), plugin (c)                                         | b, then c                          |           |
 | S1      | Explicit `destructiveHint` on every tool                                                      | Yes                                |           |
@@ -374,6 +387,7 @@ Other WHOOP and health MCP servers:
 - https://github.com/davidmosiah/whoop-mcp (baseline deltas, privacy audit)
 - https://github.com/yuridivonis/whoop-mcp-server (stores nothing, per the terms)
 - https://github.com/nchemb/whoop-mcp, https://github.com/ericporres/whoop-my-ai
+- https://glama.ai/mcp/servers/izqui/whoop-mcp and npm `whoop-mcp` 0.1.2 (npx install, pasted access token, no refresh; GitHub repo since deleted)
 - https://registry.modelcontextprotocol.io
 - https://github.com/vnglst/garmin-mcp-server, https://glama.ai/mcp/servers/@the-momentum/apple-health-mcp-server
 
