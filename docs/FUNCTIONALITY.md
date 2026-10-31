@@ -2260,7 +2260,7 @@ Both workflows use `actions/checkout@v7`, `oven-sh/setup-bun@v2` with `bun-versi
   2. `bunx biome ci .` (Linux only)
   3. `bun run typecheck`
   4. `bun test` (includes the smoke tests that run the Node bundle on the runner's Node 24)
-  5. `bun run test:node` (`node --test test/node/`): the loopback server (`serveLocal`, `listenLocal`) on real Node, bundled first with `bun build --target=node` like the shipped file. `bun test` runs everything else on Bun's own node:http, which differs in what this server relies on (exclusive binds, `closeIdleConnections`, keep-alive, body errors). The file is named `*.node-test.mjs` so `bun test` skips it.
+  5. `bun run test:node` (`node --test 'test/node/*.node-test.mjs'`; Node 24 doesn't take a directory): the loopback server (`serveLocal`, `listenLocal`) on real Node, bundled first with `bun build --target=node` like the shipped file. `bun test` runs everything else on Bun's own node:http, which differs in what this server relies on (exclusive binds, `closeIdleConnections`, keep-alive, body errors). The file is named `*.node-test.mjs` so `bun test` skips it.
   6. `bun run build:mcpb` (validates the manifest), unzip to `dist/check`, and check `node dist/check/server/index.mjs --version` equals the package.json version
 
 **`release.yml`**

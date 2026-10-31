@@ -7,7 +7,7 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "test": "bun test",
-    "test:node": "node --test test/node/",
+    "test:node": "node --test 'test/node/*.node-test.mjs'",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "format": "biome check --write .",

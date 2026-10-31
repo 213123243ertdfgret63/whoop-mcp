@@ -1,6 +1,6 @@
 // The loopback server (src/auth/http.ts) on real Node, the runtime Claude Desktop runs the extension on.
 // `bun test` runs the rest of the suite on Bun's own node:http, which differs in the details this server relies on
-// (exclusive binds, closeIdleConnections, keep-alive, request body errors). Run with:  node --test test/node/
+// (exclusive binds, closeIdleConnections, keep-alive, request body errors). Run with:  bun run test:node
 // The modules are bundled for Node first, the way the shipped server/index.mjs is (needs bun on PATH).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
