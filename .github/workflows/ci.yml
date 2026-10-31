@@ -35,6 +35,11 @@ jobs:
         with:
           bun-version-file: .bun-version
 
+      # The Node Claude Desktop's built-in runtime has (24.22 in Desktop 4.4212); the smoke tests run the bundle on it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       # `prepare` also generates src/whoop/openapi.d.ts from openapi/whoop.yaml.
       - run: bun install --frozen-lockfile
 
@@ -48,14 +53,13 @@ jobs:
       - name: Test
         run: bun test
 
-      - name: Build binary
-        run: bun run build
+      # The loopback server on real Node, which Desktop runs it on (bun test uses Bun's own node:http).
+      - name: Test on Node
+        run: bun run test:node
 
-      - name: Smoke-test the compiled binary
-        run: bun test test/smoke.test.ts -t "compiled binary"
-        env:
-          WHOOP_MCP_BINARY: dist/whoop-mcp
-
-      # Validates the manifests and checks the executables keep their execute bit in the zip.
-      - name: Build the Claude Desktop extensions
-        run: bun run build:mcpb
+      # Validates the manifest, then runs the bundle on Node 24, the Node Claude Desktop runs it on.
+      - name: Build the Claude Desktop extension
+        run: |
+          bun run build:mcpb
+          mkdir -p dist/check && unzip -q dist/whoop-mcp-macos.mcpb -d dist/check
+          test "$(node dist/check/server/index.mjs --version)" = "$(bun -p 'require("./package.json").version')"

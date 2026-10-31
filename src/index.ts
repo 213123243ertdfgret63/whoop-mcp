@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { BackgroundLogin } from "./auth/background-login.ts";
 import { deleteStoredCredentials, resolveClientCredentials } from "./auth/credentials.ts";
 import { deleteTokens, readTokens, tokenPath } from "./auth/store.ts";
 import { terminalIO } from "./cli/terminal.ts";
-import { ConfigError, VERSION } from "./config.ts";
+import { ConfigError, configDir, VERSION } from "./config.ts";
 import { errorFields, log } from "./log.ts";
 import { createServer } from "./server.ts";
 import { loginAndSave, runSetup } from "./setup.ts";
@@ -49,6 +51,21 @@ function stopper(loginFlow: BackgroundLogin, client: WhoopClient): (reason: stri
   };
 }
 
+/**
+ * Leaves `<config dir>/run/<pid>` while serving, so the whoop-reset skill can find and stop the server: under
+ * Desktop's built-in Node it runs as a "Claude Helper" process whose command line doesn't name the extension.
+ */
+function recordPid(): void {
+  const file = join(configDir(), "run", String(process.pid));
+  try {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    writeFileSync(file, `${process.argv[1] ?? ""}\n`, { mode: 0o600 });
+    process.once("exit", () => rmSync(file, { force: true }));
+  } catch (err) {
+    log.debug("couldn't record the server's pid", errorFields(err));
+  }
+}
+
 async function main(): Promise<void> {
   switch (command) {
     case "serve":
@@ -58,7 +75,9 @@ async function main(): Promise<void> {
         version: VERSION,
         pid: process.pid,
         platform: `${process.platform}-${process.arch}`,
-        bun: Bun.version,
+        node: process.versions.node,
+        // Set when Claude Desktop runs the extension on its built-in Node (an Electron utility process).
+        ...(process.versions.electron ? { electron: process.versions.electron } : {}),
         log_level: log.settings().level,
         log_file: log.settings().file ?? "off",
       });
@@ -83,7 +102,13 @@ async function main(): Promise<void> {
         // server, a timer, a keep-alive socket) could otherwise keep this process alive after Claude is gone.
         process.stdin.once("end", () => shutdown("stdin closed"));
         process.stdin.once("close", () => shutdown("stdin closed"));
+        // Claude Desktop's built-in-Node host exits at once on SIGTERM/SIGINT, which would cut a token refresh off
+        // mid-save (WHOOP has already spent the old refresh token). This process is only ever this server, so
+        // its handlers are replaced by the graceful shutdown.
+        if ("parentPort" in process)
+          for (const signal of ["SIGTERM", "SIGINT"] as const) process.removeAllListeners(signal);
         for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(signal, () => shutdown(signal));
+        recordPid();
       }
       return;
 
@@ -172,7 +197,13 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+main().then(
+  () => {
+    // The CLI commands are done; don't wait for stdin (setup's prompts read it) to close as well.
+    if (command !== "serve") process.exit();
+  },
+  (err) => {
+    console.error(err instanceof Error ? err.message : err);
+    process.exit(1);
+  },
+);

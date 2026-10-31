@@ -1,19 +1,19 @@
 # whoop-mcp: full functionality reference
 
-What whoop-mcp v0.7.0 does, in enough detail to migrate or rebuild it from scratch: every tool and parameter, the login and credential rules, the runtime, packaging and release, and the reasons behind the non-obvious choices. It was written from the code, tests and git history on 2026-10-31, then checked against the code by two separate reviewers. The README is the user guide; this is the builder's reference.
+What whoop-mcp does, in enough detail to migrate or rebuild it from scratch: every tool and parameter, the login and credential rules, the runtime, packaging and release, and the reasons behind the non-obvious choices. It was written for v0.7.0 from the code, tests and git history on 2026-10-31, checked against the code by two separate reviewers, then updated for the move from compiled Bun binaries to a Node bundle (v0.8; `package.json` still says 0.7.0 until that release is cut). The README is the user guide; this is the builder's reference.
 
 When code and this document disagree, the code wins. Each part names its source files.
 
 ## At a glance
 
-- **What it is:** a local MCP server for the WHOOP Developer API v2, written in TypeScript for Bun and compiled to a single binary. It's shipped only as a macOS Claude Desktop extension (`.mcpb`, shown as "WHOOP (unofficial)", extension ID `local.mcpb.whoop-mcp-contributors.whoop-mcp`). It is read-only and unofficial.
+- **What it is:** a local MCP server for the WHOOP Developer API v2, written in TypeScript, developed and tested with Bun, and shipped as one JavaScript file bundled for Node.js (`server/index.mjs`) that Claude Desktop runs on its own built-in Node. It's shipped only as a macOS Claude Desktop extension (`.mcpb`, shown as "WHOOP (unofficial)", extension ID `local.mcpb.whoop-mcp-contributors.whoop-mcp`). It is read-only and unofficial.
 - **Tools (14):**
   - data: `whoop_today`, `whoop_daily_summaries`, `whoop_sleep`, `whoop_workouts`, `whoop_trends`, `whoop_baselines`, `whoop_compare_periods`, `whoop_training_load`, `whoop_correlate`, `whoop_get_record`, `whoop_profile`;
   - connection: `whoop_status`, `whoop_login`, `whoop_disconnect`.
 - **Prompts (3):** `whoop-connect`, `whoop-disconnect`, `whoop-status`. Desktop chat lists them under **+**. The extension also writes them as Claude Code skills in `~/.claude/skills`.
 - **Login:** each user brings their own WHOOP developer app (WHOOP's terms forbid a shared one). A one-time local setup page on `localhost:8787` collects the app's Client ID and Secret, then runs WHOOP's OAuth consent. The credentials are kept in the macOS keychain, and the tokens in `~/.config/whoop-mcp/tokens.json` (owner-only).
 - **Logs:** `~/Library/Logs/whoop-mcp/whoop-mcp.log`. Tokens, secrets and WHOOP health data are never logged.
-- **Release:** `bun run release <x.y.z> --push` tags a version. GitHub Actions, on a macOS runner, then builds `whoop-mcp-macos.mcpb` (arm64 and x64, ad-hoc signed, minimum macOS 13) and publishes it with `SHA256SUMS`.
+- **Release:** `bun run release <x.y.z> --push` tags a version. GitHub Actions, on an Ubuntu runner with Node 24, then builds `whoop-mcp-macos.mcpb` (a Node-type bundle: manifest, icon and `server/index.mjs`, no binaries) and publishes it with `SHA256SUMS`.
 
 Parts below:
 
@@ -674,7 +674,7 @@ Sources: `src/whoop/client.ts`, `src/config.ts`, `src/auth/oauth.ts`, `src/auth/
 | `WHOOP.tokenUrl`       | `https://api.prod.whoop.com/oauth/oauth2/token`                                                |                                                                                              |
 | `WHOOP.openapiUrl`     | `https://api.prod.whoop.com/developer/doc/openapi.json`                                        | Used only by `scripts/update-spec.ts`                                                        |
 | `DEFAULT_REDIRECT_URI` | `http://localhost:8787/callback`                                                               | Confirmed to work as a WHOOP dashboard app redirect                                          |
-| `VERSION`              | `package.json` `version`                                                                       | Single source of truth. It is inlined into compiled binaries, and `bun run release` bumps it |
+| `VERSION`              | `package.json` `version`                                                                       | Single source of truth. It is inlined into the bundle, and `bun run release` bumps it        |
 | `SCOPES`               | `offline read:profile read:body_measurement read:cycles read:recovery read:sleep read:workout` | `offline` is the scope that returns a refresh token                                          |
 
 Env vars:
@@ -757,7 +757,7 @@ Timing constants:
    - If the access token on disk differs (another process rotated it), retry with it and don't refresh.
    - Otherwise refresh once (`refreshed(latest)`) and retry.
    - A second 401 becomes a `WhoopApiError(401)`. There is no loop: the test expects 2 API calls and 1 token call.
-5. While the status is 429 and attempts < 2: log a warning with `wait_ms` and `attempt`, `Bun.sleep(retryDelayMs(res))`, and resend with the same token.
+5. While the status is 429 and attempts < 2: log a warning with `wait_ms` and `attempt`, `sleep(retryDelayMs(res))` (`node:timers/promises` `setTimeout`), and resend with the same token.
 6. Read the body as text. If `!res.ok`, throw `WhoopApiError(status, path, text, x-whoop-trace-id)`. Otherwise return `JSON.parse(text)`.
 
 `retryDelayMs(res)` (exported):
@@ -776,7 +776,7 @@ Timing constants:
   - on a 429, `rate_limit`: every `x-ratelimit-*` header, lowercased
 - The response body is never logged (it is WHOOP data), and neither is the token. A test asserts that `access-1` never appears in the log output.
 
-User agent: no explicit `User-Agent` is set, so requests carry Bun's default. Cloudflare in front of WHOOP refuses some generic user agents (e.g. Python's) with a 403. Keep the runtime default, or set a non-generic UA, if you migrate to another HTTP stack.
+User agent: no explicit `User-Agent` is set, so requests carry the runtime's default: `node` on Node's built-in fetch (what Desktop runs), Bun's default under `bun test` or `bun run`. Cloudflare in front of WHOOP refuses some generic user agents (e.g. Python's) with a 403. The v0.7 binaries sent Bun's UA; `node` has not been checked live against WHOOP in this document, so if requests start failing with a Cloudflare 403, set a non-generic UA.
 
 #### Token refresh
 
@@ -935,7 +935,7 @@ Sources: `src/auth/oauth.ts`, `src/auth/login.ts`, `src/auth/background-login.ts
 
 - Each user creates **their own WHOOP developer app**. WHOOP's terms (ToU §3.2.1) don't let open-source tools ship developer credentials, so no client id or secret exists in source.
 - There are two credential layers:
-  1. **App credentials** (Client ID and Secret, plus redirect URI). They go to the OS keychain, with a 0600 file as fallback.
+  1. **App credentials** (Client ID and Secret, plus redirect URI). They go to the macOS keychain (through Apple's `/usr/bin/security`), with a 0600 file as fallback.
   2. **User tokens** (access and refresh). They go to a 0600 `tokens.json`.
 - Everything is driven from inside the MCP server (the `whoop_login` tool), so a Claude Desktop user never needs a terminal. A CLI (`setup`, `login`, `status`, `logout`) exists for development.
 
@@ -1000,7 +1000,7 @@ Sources: `src/auth/store.ts`, `src/config.ts`, `test/store.test.ts`
 
 ### App credentials storage
 
-Sources: `src/auth/credentials.ts`, `src/config.ts`, `test/credentials.test.ts`, `test/preload.ts`, commit 3c3a066
+Sources: `src/auth/credentials.ts`, `src/auth/keychain.ts`, `src/config.ts`, `test/credentials.test.ts`, `test/keychain.test.ts`, `test/preload.ts`, `test/refuse-security.sh`, commit 3c3a066
 
 - `ClientCredentials` is `{ clientId, clientSecret, redirectUri }`.
 - **Resolution order** (`resolveClientCredentials`):
@@ -1011,9 +1011,19 @@ Sources: `src/auth/credentials.ts`, `src/config.ts`, `test/credentials.test.ts`,
 
 **Keychain**
 
-- Uses `Bun.secrets` with `{ service: "whoop-mcp", name: "client-credentials" }`.
+- Item: generic password, service `whoop-mcp`, account `client-credentials`.
 - The value is `JSON.stringify(creds)`, including `redirectUri`.
-- `WHOOP_MCP_CREDENTIAL_STORE=file` disables the keychain entirely, and the code then never touches it. Use it for tests and headless Linux. The test preload always sets it, because disconnect deletes credentials and keychain prompts hung the tests.
+- Only on macOS: `keychainEnabled()` is `process.platform === "darwin" && WHOOP_MCP_CREDENTIAL_STORE !== "file"`. Other platforms always use the file. `WHOOP_MCP_CREDENTIAL_STORE=file` disables the keychain on macOS too, and the code then never touches it. The test preload always sets it, because disconnect deletes credentials and keychain prompts hung the tests.
+
+**Keychain access through `/usr/bin/security` (`src/auth/keychain.ts`)**
+
+- Every keychain call spawns Apple's `security` tool (`node:child_process` `spawn`, stdin/stdout/stderr piped). `WHOOP_MCP_SECURITY` replaces the path (tests only).
+- **Why not a native keychain API (as `Bun.secrets` was until v0.7):** macOS lets only the program that saved an item read it without asking, or change or delete it at all, and it identifies a program by its code signature. The Bun builds were ad-hoc signed, so every release was a new program and couldn't overwrite or delete what the previous one saved (`errSecInvalidOwnerEdit`, `-25244`). `security` is the same Apple-signed program in every version, so an item it saves stays readable and deletable across whoop-mcp updates.
+- **Read** (`getItem`): `security find-generic-password -s whoop-mcp -a client-credentials -w`, 60 s timeout (long, because it may show an access prompt). Exit `0` returns stdout minus the one trailing newline `security` adds, decoded by `decodeOutput` when `security` printed it as hex (it does that when any byte isn't printable ASCII, e.g. a non-ASCII letter; checked against the real tool). `decodeOutput` decodes only hex that becomes valid UTF-8 containing such a byte, so a printable value that merely looks like hex (`cafe`) is returned as it is; exit `44` (errSecItemNotFound) returns `null`; anything else, or a timeout (SIGKILL), throws `KeychainError("Couldn't read the keychain item (exit N: stderr | timed out).")` with `exitCode`. A missing `security` binary rejects with the spawn error.
+- **Delete** (`deleteItem`): `security delete-generic-password -s … -a …`, 15 s timeout. `0` gives `true`, `44` gives `false`, anything else throws.
+- **Save** (`setItem`): delete-then-add, not `add -U`, because an item another program saved can be deleted but not updated, and the new item then belongs to `security`. The add runs as `security -i` with the command on **stdin**: `add-generic-password -s "whoop-mcp" -a "client-credentials" -X <hex>` plus a newline. The secret is hex-encoded (`-X`), so it needs no quoting, and it never appears in a command line, where any process could read it with `ps`. Service and account are quoted (`"` and `\` escaped) because `security -i` splits on spaces. Non-zero exit throws. 15 s timeout.
+- **Upgrading from v0.7 or earlier:** the item was saved by an old Bun build, so the first read shows macOS's prompt asking whether `security` may use it; **Always Allow** makes that permanent. Saving replaces such an item by deleting it through `security` first (commit 3c3a066 already relied on `security` being able to delete items an earlier build saved), so the new item belongs to `security` and later updates don't ask. The README tells users about the prompt.
+- Everything goes through one exported object, `keychain = { get, set, delete }`, so tests can `spyOn` it.
 
 **File fallback**
 
@@ -1027,51 +1037,41 @@ Sources: `src/auth/credentials.ts`, `src/config.ts`, `test/credentials.test.ts`,
 
 **Read (`readStoredCredentials`)**
 
-- If the keychain is enabled, try `Bun.secrets.get`. Any throw (for example, no secret service) falls through to the file.
+- If the keychain is enabled, try `keychain.get`. A throw (locked keychain, Deny clicked on the access prompt) is logged as a warning ("couldn't read the WHOOP app credentials from the keychain") and falls through to the file.
 - When both stores hold credentials, the keychain wins.
 
 **Save (`saveCredentials`)** returns where the credentials went:
 
-1. With the keychain enabled: `Bun.secrets.set`, then `rm -f client.json` so no plaintext copy remains. Returns `"keychain"`.
-2. If the set throws: try `deleteKeychainItem()`, ignoring any throw. If an item was removed, try `set` again; if that succeeds, return `"keychain"`.
-   - Why: an older keychain entry would win over the file on the next read. This is usually an item an earlier build saved and this build can't overwrite. Once it's deleted, the new item belongs to this build.
-3. Otherwise write the file and return `"file"`.
+1. With the keychain enabled: `keychain.set` (delete-then-add, above), then `rm -f client.json` so no plaintext copy remains. Returns `"keychain"`.
+2. If that throws: log a warning ("couldn't save … using a private file"), then `keychain.delete` (best effort, errors ignored). Why: an older keychain entry would win over the file on the next read, so it must not silently keep the old app.
+3. Write the file and return `"file"`.
 
-**The macOS `-25244` fallback (`deleteKeychainItem`)**
-
-- Every whoop-mcp build is a different ad-hoc-signed program. On macOS only the program that saved an item may change or delete it. After an upgrade, `Bun.secrets` therefore fails with `errSecInvalidOwnerEdit`, which shows up as `-25244` in the error message (matched with `/-25244\b/`).
-- **Only** on darwin and **only** for that error, it runs:
-  `/usr/bin/security delete-generic-password -s whoop-mcp -a client-credentials`
-  with stdin, stdout and stderr ignored and a 10 s timeout.
-- Exit codes:
-  - `0`: deleted, returns `true`.
-  - `44` (errSecItemNotFound): returns `false`; the item is already gone.
-  - Anything else: log a warning with `security_exit` and rethrow the original error.
-- Other keychain errors (locked keychain, the user clicked Deny) **do not** fall back; they stay failures.
+There is no special `-25244` fallback any more: since every write goes through `security`, delete-then-add already works on items an old build saved.
 
 **Delete (`deleteStoredCredentials`)** returns `"deleted" | "none" | "failed"`:
 
-- With the keychain enabled, first check whether an item exists with `get`.
-  - If `get` throws on darwin or win32, presence is `"unknown"` and the delete is tried anyway, because those platforms always have a keychain and a denied or locked read may hide an item.
-  - If `get` throws elsewhere, presence is `false` (no keychain service).
-- If present or unknown, call `deleteKeychainItem()`:
-  - `true` gives `deleted`.
-  - `false` gives `none` when presence was unknown, otherwise `failed`.
-  - A throw gives `failed`.
+- With the keychain enabled, call `keychain.delete` **without reading first**. Why: a read of an item an older build saved shows macOS's access prompt, and a failed read (locked, denied) could hide an item anyway (tested: `get` is never called).
+  - `true` gives `deleted`, `false` leaves `none`.
+  - A throw is logged as a warning and gives `failed`.
 - Then, if `client.json` exists, remove it. If the result was still `none`, it becomes `deleted`.
 - `failed` means the keychain holds credentials but refused to delete them. The caller must not claim they are gone.
 
 ### Local callback server basics
 
-Sources: `src/auth/login.ts`, `test/login.test.ts`
+Sources: `src/auth/login.ts`, `src/auth/http.ts`, `test/login.test.ts`
 
 - **`parseRedirect`:** the redirect must be `http:` with host `localhost`, `127.0.0.1` or `[::1]`. Anything else throws `Redirect URI must be http on localhost/127.0.0.1 for local login (got …)` **before anything listens**.
 - **`listenLocal`:**
   - Port is the redirect port, or 80 if the URI has none (portless URIs are supported).
-  - For `localhost` it binds **both** `127.0.0.1` and `::1`. It first probes IPv6 loopback by binding `::1` on port 0. For a literal IP host it binds only that address.
+  - For `localhost` it binds **both** `127.0.0.1` and `::1`. It first probes IPv6 loopback by binding `::1` on port 0 (`hasIpv6Loopback`); without IPv6 only `127.0.0.1` is bound. For a literal IP host it binds only that address. It is `async` (binding on node:http is), so callers `await listenLocal(…)`.
   - If any bind fails, it stops the servers already started and throws `PortInUseError`: `Port {port} is already in use[ (on {host})], so WHOOP can't redirect back here. Another WHOOP login (e.g. in a second Claude window) or another program is using it; finish or close that and try again.`
   - Why both addresses: the browser may resolve either one, and a half-bound port would let another program on the other address receive the setup link or the OAuth code.
   - `stop()` is graceful, so the response that settled the flow still gets flushed.
+- **`serveLocal` (`src/auth/http.ts`)**, the node:http adapter that replaced `Bun.serve` in v0.8. Handlers keep the web-standard shape `(Request) => Response | Promise<Response>`:
+  - Listens on exactly `hostname:port` with `exclusive: true` (no cluster port sharing, which would defeat the both-addresses rule) and resolves with `{ port, stop(force?) }`; a listen error such as `EADDRINUSE` rejects, and `listenLocal` turns it into `PortInUseError`.
+  - Each request becomes a `Request` on `http://<Host header, or hostname:port>`, with all headers. GET and HEAD get no body; other methods get a streamed body (`duplex: "half"`) that errors with `Request body exceeds maxRequestBodySize` once it passes `maxRequestBodySize` (default 1 MiB). The rest of the upload is read and dropped, so the 413 still reaches the browser. That message is Bun.serve's, kept so the existing `/maxRequestBodySize/` checks still match.
+  - A handler throw gives a plain `500 Internal error`. Responses are buffered and sent with an explicit `Content-Length`; multiple `Set-Cookie` headers are kept separate.
+  - `keepAliveTimeout` is 2 s so an idle keep-alive socket can't hold the port or the process. `stop()` closes the listener and idle connections; `stop(true)` closes all connections.
 - **`PAGE_HEADERS`** (on every HTML page):
   - `Content-Type: text/html; charset=utf-8`
   - `Cache-Control: no-store`
@@ -1080,7 +1080,7 @@ Sources: `src/auth/login.ts`, `test/login.test.ts`
   - `X-Content-Type-Options: nosniff`
   - A per-response CSP (below).
 - **`page(title, body, status=200, tone)`:**
-  - Everything is HTML-escaped (`Bun.escapeHTML`), because `body` can carry attacker-controlled `error_description` (a reflected-XSS fix).
+  - Everything is HTML-escaped (`escapeHtml` in `page-style.ts`: `& < > " '`, the same characters `Bun.escapeHTML` escaped), because `body` can carry attacker-controlled `error_description` (a reflected-XSS fix).
   - Tone `ok` prefixes the heading with "✓ ". Tones `ok` and `err` set a class on the `<h1>`.
 - **`parseCallback(url, state)`** checks **state first**:
   - `params.state !== state` gives `wrong-state`. Any web page can navigate here, so such a request must neither end the login nor get its text into the status.
@@ -1237,7 +1237,7 @@ Sources: `src/auth/browser-setup.ts`, `src/auth/page-style.ts`, `src/setup.ts`, 
 10. Methods other than GET and POST on `/setup`: `405` with `Allow: GET, POST`.
 11. `POST /setup` (the no-JavaScript form, `application/x-www-form-urlencoded`)
     - **CSRF:** `Origin` must be present and allowed. Missing, `null` or foreign origins get `403` "Forbidden" / "Cross-site request refused."
-    - `Content-Length` over 8 KiB, or a text body over 8 KiB, gives `413`. Bun's `maxRequestBodySize` is also 8 KiB, and its error is mapped to `413` even for streamed bodies without a Content-Length (tested).
+    - `Content-Length` over 8 KiB, or a text body over 8 KiB, gives `413`. The server's `maxRequestBodySize` (the node:http adapter's, formerly Bun.serve's) is also 8 KiB, and its error is mapped to `413` even for streamed bodies without a Content-Length (tested).
     - Form `token` must match; otherwise the expired page (403).
     - Touch.
     - `action=reset` ("Use different credentials"): if `authorizing`, drop the authorization (its state is no longer accepted) and set phase to `form`. Re-render the page. Reset needs the same token and origin as any other post (tested).
@@ -1541,6 +1541,7 @@ Sources: `src/index.ts`
 - On stdin `end` or `close`, or on SIGTERM, SIGINT or SIGHUP, an idempotent shutdown runs `loginFlow.cancel()` and `client.drain()`, then exits.
   - Shutdown is capped at 1.5 s, under the 2 s Claude allows between EOF and SIGTERM.
   - This frees port 8787 and doesn't lose a refreshed token.
+  - Under Desktop's built-in Node, stdin never ends and the host's own SIGTERM/SIGINT handlers would exit at once, so the server removes them first (see Serve lifecycle).
 
 ### CLI (development and terminal)
 
@@ -1561,7 +1562,8 @@ Sources: `src/index.ts`, `src/setup.ts`, `test/setup.test.ts`
 | `WHOOP_REDIRECT_URI`                     | Overrides the redirect, including for stored credentials and the setup page. It must be http on a loopback host. |
 | `WHOOP_MCP_HOME`                         | Config directory for `tokens.json` and `client.json`                                                             |
 | `XDG_CONFIG_HOME`                        | Base for the default config directory; empty counts as unset                                                     |
-| `WHOOP_MCP_CREDENTIAL_STORE=file`        | Never use the keychain                                                                                           |
+| `WHOOP_MCP_CREDENTIAL_STORE=file`        | Never use the keychain (off macOS the keychain is never used anyway)                                             |
+| `WHOOP_MCP_SECURITY`                     | Path used instead of `/usr/bin/security` (tests only; the preload points it at a refusing stub)                  |
 | `WHOOP_MCP_NO_BROWSER=1`                 | Don't open pages; only announce them                                                                             |
 
 ### Logging and secrets
@@ -1583,7 +1585,7 @@ Found when this part was checked against the code. Where they differ from the te
   - from `isConnected` (`whoop_login` returns `errorResult`);
   - from the `whoop_status` handler, which has no try/catch (the SDK turns it into a tool error);
   - from `whoop_disconnect` (`errorResult`).
-- `client.json`: `readStoredCredentials` tries the keychain first. Keychain errors and unparseable keychain values are swallowed and it falls through to the file.
+- `client.json`: `readStoredCredentials` tries the keychain first. Keychain errors (logged as a warning) and unparseable keychain values make it fall through to the file.
   - In the file, unparseable JSON gives `null` with the warning `ignoring unreadable stored WHOOP app credentials`.
   - A non-ENOENT read error **throws** from `readStoredCredentials` and `resolveClientCredentials`. This only happens when the keychain is disabled or holds nothing.
 - That error is not a `ConfigError`, so:
@@ -1645,7 +1647,7 @@ Found when this part was checked against the code. Where they differ from the te
 | 200 / submit status | `{ok:true, authorize_url, warning?}` or `{ok:false, field, message}` | `submit()` outcome (400/409/410/429/500)             |
 - `/setup/status` with a bad token also returns 403 `{"error":"forbidden"}`.
 - JSON responses carry `Content-Type: application/json`, `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. They do **not** carry `Referrer-Policy`, `X-Frame-Options` or a CSP; HTML pages have all of them plus a per-response nonce CSP.
-- Form-POST size failures (`Content-Length` or text over the limit, or Bun's `maxRequestBodySize`) return the HTML page `Too large` / `Request too large.` with status 413.
+- Form-POST size failures (`Content-Length` or text over the limit, or the server's `maxRequestBodySize`) return the HTML page `Too large` / `Request too large.` with status 413.
 - Route order after the Host check:
   1. callback path;
   2. `/setup/status`;
@@ -1654,13 +1656,10 @@ Found when this part was checked against the code. Where they differ from the te
   5. `/setup/authorize`, `/setup/verify`, `/setup`.
 - So once the flow has ended, `/setup/verify` gets the 410 HTML page, not JSON.
 
-**Keychain delete path** (src/auth/credentials.ts, .claude/skills/whoop-reset/scripts/whoop-reset.ts)
-- `deleteKeychainItem()` calls `Bun.secrets.delete({service:"whoop-mcp", name:"client-credentials"})` first.
-- Only when that throws an error whose message matches `-25244` (errSecInvalidOwnerEdit: the item belongs to another ad-hoc-signed build) **and** the platform is darwin does it spawn `/usr/bin/security delete-generic-password -s whoop-mcp -a client-credentials` (10 s timeout).
-  - Exit 0 gives true, exit 44 (not found) gives false, any other exit logs a warn and rethrows the original error.
-  - Any other error (locked keychain, a click on Deny) is rethrown and no fallback runs.
-- The `/whoop-reset` skill instead runs `security delete-generic-password -s whoop-mcp` with **no account**, up to 20 times until it exits 44. That removes every item under the service, including ones older builds saved under other account names.
-- `Bun.secrets` is experimental and needs a secret service on Linux, which is why the 0600 `client.json` fallback exists. `WHOOP_MCP_CREDENTIAL_STORE=file` forces the file store.
+**Keychain delete path** (src/auth/credentials.ts, src/auth/keychain.ts, .claude/skills/whoop-reset/scripts/whoop-reset.ts)
+- Until v0.7, `deleteKeychainItem()` called `Bun.secrets.delete` and fell back to `/usr/bin/security delete-generic-password` only for `-25244` (errSecInvalidOwnerEdit, an item another ad-hoc-signed build owned). That function and the `-25244` matching are gone: every keychain call now goes through `security` (`deleteItem`: exit 0 gives true, 44 gives false, anything else throws a `KeychainError`).
+- The `/whoop-reset` skill instead runs `security delete-generic-password -s whoop-mcp` with **no account**, up to 20 times until it exits 44. That removes every item under the service, including ones older builds saved under other account names. `WHOOP_RESET_SECURITY` replaces the tool in its tests.
+- The keychain is macOS-only; elsewhere the 0600 `client.json` is always used. `WHOOP_MCP_CREDENTIAL_STORE=file` forces the file store on macOS too.
 
 **WHOOP remembers consent** (.claude/skills/whoop-reset/SKILL.md, src/auth/browser-setup.ts, src/auth/login.ts)
 - If the browser is still signed in to WHOOP and the app was approved before, re-authorizing can **skip the approval screen**. The callback then arrives almost at once.
@@ -1689,13 +1688,14 @@ Sources: `src/index.ts`, `src/server.ts`, `src/skills.ts`, `src/log.ts`, `src/cl
 
 ### Build and entry point
 
-- Entry is `src/index.ts` (shebang `#!/usr/bin/env bun`). The only runtime deps are `@modelcontextprotocol/server@2.4.0` and `zod@^4.2.0`. Tool schemas import `zod/v4`.
-- `VERSION` comes from `package.json` `version` and is inlined into compiled binaries. `bun run release` bumps it.
-- Binary build: `bun build src/index.ts --compile --minify --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile dist/whoop-mcp`. The `.mcpb` build adds `--target=bun-<target>`. It ships arm64 and x64 binaries plus a `/bin/sh` launcher `server/launch.sh`.
+- Entry is `src/index.ts` (shebang `#!/usr/bin/env bun`, for running the source in development). The only runtime deps are `@modelcontextprotocol/server@2.4.0` and `zod@^4.2.0`. Tool schemas import `zod/v4`.
+- The source uses only Node APIs (`node:http`, `node:child_process`, `node:readline`, `node:fs`, `node:timers/promises`), no `Bun.*`, so the same code runs under `bun` in development and tests and under Node when shipped. Only the dev scripts (`scripts/`, the whoop-reset skill) and tests use Bun APIs.
+- `VERSION` comes from `package.json` `version` and is inlined into the bundle. `bun run release` bumps it.
+- Shipped build: `bun build src/index.ts --target=node --format=esm`, one ESM file with the dependencies included and not minified (stack traces in the log stay readable). `bun run build` writes it to `dist/whoop-mcp.mjs` (run it with `node dist/whoop-mcp.mjs status`); the `.mcpb` build writes it to `server/index.mjs`. It runs on Node 22 or later (the manifest's `compatibility.runtimes.node` is `>=22.0.0`).
 - The `.mcpb` manifest (`scripts/build-mcpb.ts`):
   - `name: whoop-mcp` stays fixed, because changing it gives the extension a new ID and installs it next to the old one.
   - `display_name: "WHOOP (unofficial)"`.
-  - `compatibility.platforms: ["darwin"]`.
+  - `compatibility: { platforms: ["darwin"], runtimes: { node: ">=22.0.0" } }`.
   - `mcp_config.env = { WHOOP_MCP_INSTALL_SKILLS: "${user_config.claude_code_commands}" }`.
   - `prompts` is built from `PROMPTS` (name, description, text), with `prompts_generated: false` and `tools_generated: false`.
 - `user_config.claude_code_commands`:
@@ -1748,33 +1748,35 @@ Usage: whoop-mcp <command>
   version               Print the version
 ```
 
-Top-level error handling: `main().catch` prints `err.message` (or the raw value) to stderr and calls `process.exit(1)`.
+Top-level error handling: when `main()` rejects, it prints `err.message` (or the raw value) to stderr and calls `process.exit(1)`. When it resolves and the command isn't `serve`, it calls `process.exit()`: the CLI command is done, and an open stdin (setup's prompts read it through readline) must not keep the process alive.
 
 ### Terminal IO (`src/cli/terminal.ts`)
 
 - `PromptIO` has these members:
   - `print(text)`: writes to stderr.
-  - `ask(question)`: writes the question to stderr, reads one line from `console[Symbol.asyncIterator]()` and trims it. EOF throws "Input ended before setup finished."
-  - `askSecret(question)`: hides input with `stty -echo` (spawned with `stdin: "inherit"`), then writes a newline to stderr. `stty echo` is restored in a `finally` block. A temporary SIGINT handler restores echo and exits **130**. When stdin is not a TTY, or on win32 (no stty), it falls back to plain `ask` with the input visible.
+  - `ask(question)`: writes the question to stderr, reads one line from a `node:readline` interface on stdin (`terminal: false`) and trims it. The interface is created on first use, because an open one keeps stdin, and so the process, alive. EOF throws "Input ended before setup finished."
+  - `askSecret(question)`: hides input with `/bin/stty -echo` (`spawnSync`, stdin inherited, stdout and stderr ignored), then writes a newline to stderr. `stty echo` is restored in a `finally` block. A temporary SIGINT handler restores echo and exits **130**. When stdin is not a TTY, or on win32 (no stty), it falls back to plain `ask` with the input visible.
   - `openUrl(url)`.
-- `openUrl` uses `open` on darwin, `explorer` on win32 and `xdg-open` elsewhere, spawned with stdout and stderr ignored. It is best effort, because the URL is always printed as well. On a spawn failure it logs a warn "could not open a browser" with `url = origin + pathname` only. The query is left out because it carries a one-time token.
+- `openUrl` uses `/usr/bin/open` on darwin (a full path, because Desktop may start the server without a usual `PATH`), `explorer` on win32 and `xdg-open` elsewhere, spawned detached and unref'd with stdio ignored. It is best effort, because the URL is always printed as well. On a spawn failure (a throw, or the child's `error` event, which is how Node reports a missing opener) it logs a warn "could not open a browser" with `url = origin + pathname` only. The query is left out because it carries a one-time token.
 
 ### Serve lifecycle (`src/index.ts`)
 
 1. `log.configure({...process.env, WHOOP_MCP_LOG_STDERR_LEVEL: env value ?? "warn"})`. Claude Desktop already copies stderr into its own log, so stderr is kept to problems and the details go to our file.
-2. Log info `starting` with `version`, `pid`, `platform` (`${platform}-${arch}`), `bun` (Bun.version), `log_level` and `log_file` (the path, or `"off"`).
+2. Log info `starting` with `version`, `pid`, `platform` (`${platform}-${arch}`), `node` (`process.versions.node`), `electron` (only when `process.versions.electron` is set, i.e. on Desktop's built-in Node), `log_level` and `log_file` (the path, or `"off"`).
 3. Install process handlers:
    - `uncaughtException`: log error "uncaught exception" with `errorFields` plus `stack`, then `process.exit(1)`.
-   - `unhandledRejection`: log error "unhandled rejection". The process does **not** exit.
+   - `unhandledRejection`: log error "unhandled rejection". Our handler does **not** exit, but under Desktop's built-in Node the host's own handler still exits with 1 (see Runtime: Node).
    - `once("exit")`: log info `exited exit_code=<n>`.
 4. Create **one** `BackgroundLogin` and **one** `WhoopClient` per process. They are shared by every protocol-era server instance so token refreshes stay single-flight. Call `serveStdio(() => createServer(client, loginFlow), { onerror: err => log.warn("transport error", errorFields(err)) })`. The SDK factory serves both the modern (`2026-07-28`, `server/discover`) and legacy (`2025-11-25`, `initialize`) protocol eras, and smoke tests cover both.
 5. Run `void syncSkills()`, which never throws.
 6. Shutdown is a single idempotent `stopper`:
-   - Triggers: `stdin` `end` or `close` (reason `"stdin closed"`), and `SIGTERM`, `SIGINT` or `SIGHUP` (the reason is the signal name).
+   - Triggers: `stdin` `end` or `close` (reason `"stdin closed"`), and `SIGTERM`, `SIGINT` or `SIGHUP` (the reason is the signal name). Under Desktop's built-in Node stdin is the host's never-ending stream, so only the signals (or the host ending the process) apply there.
+   - When `process.parentPort` exists (an Electron utility process, i.e. Desktop's built-in Node), it first removes **all** `SIGTERM` and `SIGINT` listeners, because the host's handlers `process.exit(0)` at once and would cut a token refresh off mid-save. This process is only ever this server, so nothing else needs them.
    - On the first trigger it logs info `client disconnected reason=<r>`. It arms an `unref`'d `setTimeout(exit(0), SHUTDOWN_GRACE_MS = 1500)` and runs `Promise.allSettled([loginFlow.cancel(), client.drain()])`, then `exit(0)`.
    - Later triggers are ignored. A SIGTERM during the wait joins the first shutdown instead of cutting it short.
    - Why 1500 ms: it stays under the roughly 2 s Claude gives between EOF and SIGTERM. A token refresh in flight must get to save, because WHOOP has already spent the old refresh token.
    - Why exit explicitly: the login page server (port 8787), timers or keep-alive sockets could otherwise keep the process alive after Claude is gone.
+7. `recordPid()`: writes `<configDir>/run/<pid>` (dir 0700, file 0600) holding `process.argv[1]` (the entry script) and removes it on `exit`. Failures are only logged at debug. Why: under the built-in Node the server is a "Claude Helper" process whose command line doesn't name the extension, so the whoop-reset skill finds it through these files.
 
 - The smoke test checks four things: exit code 0 within 5 s after stdin ends; the log contains `INFO  starting`, `tool whoop_status ok` and `client disconnected`; the file mode is 0600; stderr contains no `INFO` line.
 
@@ -2034,18 +2036,18 @@ The tool comes from the WHOOP (unofficial) extension; in this session its name m
 | `WHOOP_MCP_LOG_LEVEL`                    | log                             | debug \| info (default) \| warn \| error.                                                              |
 | `WHOOP_MCP_LOG_FILE`                     | log                             | A path, or `off`.                                                                                      |
 | `WHOOP_MCP_LOG_STDERR_LEVEL`             | log, index                      | Lowest level copied to stderr. The default equals the file level; `serve` defaults it to `warn`.       |
-| `WHOOP_MCP_CREDENTIAL_STORE`             | auth/credentials                | `file` forces the 0600 file store and skips the keychain (tests, headless Linux).                      |
+| `WHOOP_MCP_CREDENTIAL_STORE`             | auth/credentials                | `file` forces the 0600 file store and skips the keychain (tests). Off macOS the file is always used.   |
+| `WHOOP_MCP_SECURITY`                     | auth/keychain                   | Path used instead of `/usr/bin/security`. Tests only; the preload sets it to a refusing stub.          |
 | `WHOOP_MCP_NO_BROWSER`                   | auth/background-login           | `1`: pages are announced but not opened.                                                               |
 | `WHOOP_MCP_INSTALL_SKILLS`               | skills                          | Set by the extension from `claude_code_commands`.                                                      |
 | `CLAUDE_CONFIG_DIR`                      | skills                          | Root of the Claude Code skills dir.                                                                    |
-| `WHOOP_MCP_BINARY`                       | test/smoke                      | Path of a compiled binary to smoke-test.                                                               |
-| `CI`                                     | scripts/build-mcpb              | Makes build warnings fatal.                                                                            |
 
 ### Test harness rules (`test/preload.ts`, via `bunfig.toml` `[test] preload`)
 
 The preload sets:
 - `TZ=UTC`.
 - `WHOOP_MCP_CREDENTIAL_STORE=file`, keeping the suite off the real keychain, where an access prompt once hung the stdio tests.
+- `WHOOP_MCP_SECURITY=<test dir>/refuse-security.sh`, a `/bin/sh` stub that prints "tests may not use the real keychain" and exits 1 for every command. So a test that lifts the file store without its own stand-in fails instead of reaching Apple's `security`: one earlier run of the suite overwrote a developer's real saved WHOOP app credentials. Tests that cover the keychain either `spyOn` the exported `keychain` object (`test/credentials.test.ts`, macOS only) or point `WHOOP_MCP_SECURITY` at a fake `security` script that keeps its item in a temp file and logs every call's arguments and stdin (`test/keychain.test.ts`, which checks the secret only ever travels on stdin in hex).
 - `WHOOP_MCP_LOG_FILE ??= off`.
 - `WHOOP_MCP_LOG_LEVEL=info`.
 
@@ -2105,24 +2107,25 @@ Found when this part was checked against the code. Where they differ from the te
 - `serveStdio(() => createServer(client, loginFlow), …)`: `createServer` is a **factory called per protocol-era instance**.
 - `WhoopClient` and `BackgroundLogin` are created once, outside it. Otherwise each era instance would get its own refresh single-flight and its own login flow on port 8787.
 - The smoke test pins the modern era explicitly with `{ versionNegotiation: { mode: { pin: "2026-07-28" } } }`, because the v2 client defaults to legacy negotiation. It also tests the legacy era.
+- "the bundle on Node.js (what Claude Desktop runs)": `beforeAll` builds the source with `bun build --target=node --format=esm` into the temp home, exactly as build-mcpb ships it, and runs it with the `node` on `PATH` (skipped when there is none). It checks both protocol eras (14 tools, 3 prompts), `--version`, and that `whoop_login` serves the setup page from node:http with a nonce CSP, refusing a request without the token (403) and a cross-site POST.
 
 
 ## Packaging, release, CI and dev tooling
 
-Sources: `package.json`, `.bun-version`, `bunfig.toml`, `biome.json`, `tsconfig.json`, `.gitignore`, `.env.example`, `.husky/pre-commit`, `scripts/build-mcpb.ts`, `scripts/release.ts`, `scripts/update-spec.ts`, `.github/workflows/{ci,bundle,release}.yml`, `test/{preload,mcpb,release,smoke,bun-skill,whoop-reset-skill}.test.ts`, `.claude/skills/{bun,whoop-reset}/**`, `src/skills.ts`, `src/server.ts` (PROMPTS), `src/config.ts`, `README.md`, `CHANGELOG.md`, `docs/roadmap.md`, git log.
+Sources: `package.json`, `.bun-version`, `bunfig.toml`, `biome.json`, `tsconfig.json`, `.gitignore`, `.env.example`, `.husky/pre-commit`, `scripts/build-mcpb.ts`, `scripts/release.ts`, `scripts/update-spec.ts`, `.github/workflows/{ci,release}.yml`, `test/{preload,mcpb,release,smoke,keychain,bun-skill,whoop-reset-skill}.test.ts`, `.claude/skills/{bun,whoop-reset}/**`, `src/skills.ts`, `src/server.ts` (PROMPTS), `src/config.ts`, `README.md`, `CHANGELOG.md`, `docs/roadmap.md`, git log.
 
 ### Toolchain and project config
 
 | Item           | Value                                                                                                                                                                                                                                                                                                                                                                        |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Runtime        | Bun, pinned by `.bun-version` = `1.4.4`. CI reads it through `setup-bun`'s `bun-version-file`. README says "Bun 1.4+".                                                                                                                                                                                                                                                       |
+| Runtime        | Development, tests and build: Bun, pinned by `.bun-version` = `1.4.4` (CI reads it through `setup-bun`'s `bun-version-file`; README says "Bun 1.4+"). Shipped code: Node 22 or later, in practice Desktop's built-in Node 24 (see Runtime: Node). CI also installs Node 24 with `actions/setup-node@v4`.                                                                     |
 | Module type    | `"type": "module"`, `"private": true`, `name` `whoop-mcp`, `version` `0.7.0`                                                                                                                                                                                                                                                                                                 |
 | Runtime deps   | `@modelcontextprotocol/server` `2.4.0` (exact), `zod` `^4.2.0`, plus `overrides.zod` `^4.2.0` so the SDK uses the same zod                                                                                                                                                                                                                                                   |
 | Dev deps       | `@anthropic-ai/mcpb` `2.1.2` (exact; its CLI is called at `node_modules/.bin/mcpb`), `@biomejs/biome` `2.6.3`, `@modelcontextprotocol/client` `2.4.0`, `@types/bun` `^1.4.4`, `husky` `9.1.7`, `typescript` `^7.0.2`                                                                                                                                                         |
-| Version source | `src/config.ts` imports `package.json` (`with { type: "json" }`) and exports `VERSION`. It is inlined into compiled binaries. `release` bumps only package.json.                                                                                                                                                                                                             |
+| Version source | `src/config.ts` imports `package.json` (`with { type: "json" }`) and exports `VERSION`. It is inlined into the bundle. `release` bumps only package.json.                                                                                                                                                                                                                    |
 | tsconfig       | `lib/target ESNext`, `module Preserve`, `moduleResolution bundler`, `moduleDetection force`, `allowImportingTsExtensions`, `resolveJsonModule`, `verbatimModuleSyntax`, `noEmit`, `strict`, `skipLibCheck`, `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`, `noImplicitOverride`, `types: ["bun"]`. Includes `src`, `scripts`, `test`, `.claude/skills/*/scripts`. |
 | Biome          | VCS-aware (git, respects ignore file). Ignores `dist`, `src/whoop/openapi.d.ts` and `**/SKILL.md`, because Biome's Markdown formatting broke SKILL.md front matter (commit 62cc751). Formatting: spaces, indent 2, line width 120, double quotes. Linter preset `recommended` with `style.noNonNullAssertion` off. `organizeImports` on.                                     |
-| `.gitignore`   | `node_modules/`, `dist/`, `.env`, `.env.*` (except `!.env.example`), `docs/m0-results.json`, `*.log`, `.DS_Store`, `*.bun-build` (temp files `bun build --compile` can leave in the repo root; about 87 MB each), and `src/whoop/openapi.d.ts` (generated)                                                                                                                   |
+| `.gitignore`   | `node_modules/`, `dist/`, `.env`, `.env.*` (except `!.env.example`), `docs/m0-results.json`, `*.log`, `.DS_Store`, `*.bun-build` (temp files `bun build --compile` left in the repo root before v0.8; about 87 MB each), and `src/whoop/openapi.d.ts` (generated)                                                                                                                   |
 | `.env.example` | `WHOOP_CLIENT_ID=`, `WHOOP_CLIENT_SECRET=`, `WHOOP_REDIRECT_URI=http://localhost:8787/callback` (must exactly match the app's registered redirect), optional `WHOOP_MCP_HOME` (default `~/.config/whoop-mcp`)                                                                                                                                                                |
 
 ### package.json scripts
@@ -2136,12 +2139,12 @@ Sources: `package.json`, `.bun-version`, `bunfig.toml`, `biome.json`, `tsconfig.
 | `spec:update`     | `scripts/update-spec.ts`. Fetches `https://api.prod.whoop.com/developer/doc/openapi.json`, drops every path containing `/partner/`, sorts only name-keyed maps (`paths`, `schemas`, `properties`, `responses`) because WHOOP returns them in varying order, writes `openapi/whoop.yaml` with a 2-line header comment, then runs `biome format --write` so an unchanged upstream spec gives no diff |
 | `gen:types`       | `bunx openapi-typescript@7.13.0 openapi/whoop.yaml -o src/whoop/openapi.d.ts`                                                                                                                                                                                                                                                                                                                      |
 | `inspect`         | `bunx @modelcontextprotocol/inspector bun run src/index.ts`                                                                                                                                                                                                                                                                                                                                        |
-| `build`           | `bun build src/index.ts --compile --minify --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile dist/whoop-mcp` (single binary for the host)                                                                                                                                                                                                                                        |
+| `build`           | `bun build src/index.ts --target=node --format=esm --outfile dist/whoop-mcp.mjs` (the Node bundle, for `node dist/whoop-mcp.mjs <command>`)                                                                                                                                                                                                                                                        |
 | `release`         | `bun run scripts/release.ts`                                                                                                                                                                                                                                                                                                                                                                       |
 | `prepare`         | `husky && bun run gen:types`, so `bun install` installs hooks and generates the API types                                                                                                                                                                                                                                                                                                          |
 | `build:mcpb`      | `bun run scripts/build-mcpb.ts`                                                                                                                                                                                                                                                                                                                                                                    |
 
-Compile flags: `--no-compile-autoload-dotenv` and `--no-compile-autoload-bunfig` stop the shipped binary from picking up a `.env` or `bunfig.toml` in whatever cwd Desktop starts it in.
+Until v0.7 `build` was `bun build --compile` with `--no-compile-autoload-dotenv` and `--no-compile-autoload-bunfig`, so the shipped binary wouldn't pick up a `.env` or `bunfig.toml` in Desktop's cwd. Node doesn't autoload either file, so the bundle needs no such flags.
 
 ### Pre-commit hook (`.husky/pre-commit`)
 
@@ -2152,38 +2155,36 @@ Compile flags: `--no-compile-autoload-dotenv` and `--no-compile-autoload-bunfig`
 
 ### Extension bundle build (`scripts/build-mcpb.ts`)
 
-Usage: `bun run build:mcpb`, with no arguments; extra args print usage and exit 2. Output: `dist/whoop-mcp-macos.mcpb`, about 82 MB. It then prints `Built <path> (<n> MB)` to stderr.
+Usage: `bun run build:mcpb`, with no arguments; extra args print usage and exit 2. Output: `dist/whoop-mcp-macos.mcpb`, about 0.2 MB (`server/index.mjs` is about 1 MB unpacked). It then prints `Built <path> (<n> MB)` to stderr. It runs on any OS: plain JavaScript needs no code signing, per-CPU binaries or exec bits.
 
 Steps:
-1. Refuses to run on `win32` (exit 1), because Windows zips carry no Unix file modes.
-2. Sets logging to `WHOOP_MCP_LOG_FILE=off`, `WHOOP_MCP_LOG_LEVEL=warn` (the build starts a server in-process and its routine log lines would clutter the output).
-3. **Tool list from the server itself:** runs `createServer()` with a `Client` over `InMemoryTransport.createLinkedPair()`, calls `listTools()`, and keeps `{name, description: summary(description)}`. This means the install dialog can't drift from the code.
+1. Sets logging to `WHOOP_MCP_LOG_FILE=off`, `WHOOP_MCP_LOG_LEVEL=warn` (the build starts a server in-process and its routine log lines would clutter the output).
+2. **Tool list from the server itself:** runs `createServer()` with a `Client` over `InMemoryTransport.createLinkedPair()`, calls `listTools()`, and keeps `{name, description: summary(description)}`. This means the install dialog can't drift from the code.
    - `summary(desc, max=160)`: takes the first sentence. It splits on `. ` followed by a capital letter, but not after `e.g`, `i.e`, `vs` or `etc` (regex `(?<!\b(?:e\.g|i\.e|vs|etc))\.\s+(?=[A-Z])`). It adds a trailing `.` if missing. If the result is longer than `max`, it cuts at the last word boundary and appends `…`.
-4. Staging dir `dist/mcpb/macos/` (removed first): copies `assets/icon.png` to `icon.png`. For each arch in `arm64`, `x64`:
-   - compile: `bun build src/index.ts --compile --minify --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target=bun-darwin-<arch> --outfile server/whoop-mcp-darwin-<arch>`, then `chmod 755`.
-   - **ad-hoc sign** (darwin only): `codesign --force --sign - <bin>` then `codesign --verify`. Bun signs native builds ad hoc, but cross-compiled ones may not be signed, and Apple Silicon won't run unsigned code.
-   - **minimum-macOS check** (darwin only): reads `minos N` from `otool -l`. If N > 13 (`MAX_MACOS_MINIMUM`), it throws when `CI` is set and only warns locally. Why: for the native target, `--compile` copies the running bun, and a Homebrew or self-built bun targets the host's macOS. Official bun releases target macOS 13, and release builds must not raise that minimum.
-5. Writes `server/launch.sh` (mode 755), shown below.
-6. Writes `manifest.json` (pretty-printed JSON plus a trailing newline), runs `mcpb validate`, then `mcpb pack <stage> <out>`.
-7. **Exec-bit check:** `zipinfo <out>`. Each of `server/whoop-mcp-darwin-arm64`, `server/whoop-mcp-darwin-x64` and `server/launch.sh` must have `rwx` in columns 1–3 of its line, or the build throws. mcpb stores only the permission bits (`?rwx…`), and those are all Desktop reads. Desktop marks an extracted file executable only if its zip entry has the owner-exec bit (mcpb#294, #235).
-8. Deletes the staging dir (about 300 MB).
+3. Staging dir `dist/mcpb/macos/` (removed first): copies `assets/icon.png` to `icon.png`, then bundles the server: `bun build src/index.ts --target=node --format=esm --outfile server/index.mjs`. One ESM file with the dependencies included, **not minified**, so stack traces in the log stay readable.
+4. Writes `manifest.json` (pretty-printed JSON plus a trailing newline), runs `mcpb validate`, then `mcpb pack <stage> <out>`.
+5. Deletes the staging dir.
 
-Exports for tests: `DIRNAME`, `LAUNCH_SH`, `manifest`, `summary`.
+Exports for tests: `DIRNAME`, `NODE_RUNTIME` (`">=22.0.0"`), `manifest`, `summary`.
 
-`launch.sh` (exact behaviour):
-```sh
-#!/bin/sh
-dir=$(cd "$(dirname "$0")" && pwd)
-case "$(uname -m)" in
-  arm64) bin="$dir/whoop-mcp-darwin-arm64" ;;
-  *) bin="$dir/whoop-mcp-darwin-x64" ;;
-esac
-[ -x "$bin" ] || chmod 755 "$bin" 2>/dev/null
-exec "$bin" "$@"
-```
+Gone since v0.8 (they belonged to the compiled-binary build): the darwin-arm64 and darwin-x64 binaries, `server/launch.sh` (picked the binary by `uname -m` and restored its exec bit), ad-hoc `codesign`, the `otool -l` `minos` check (fatal under `CI`, because a Homebrew bun produced binaries needing a newer macOS), the `zipinfo` exec-bit check, and the refusal to build on Windows. `test/mcpb.test.ts` no longer tests a launcher.
 
-- One bundle carries both binaries because the manifest has no CPU-architecture field (mcpb#10).
-- The script restores the exec bit for Desktop builds that drop it. Desktop starts it with `/bin/sh`, so the launcher's own exec bit can't block it either.
+### Runtime: Node (since v0.8)
+
+Sources: `scripts/build-mcpb.ts`, `src/index.ts`, `test/mcpb.test.ts`, `test/smoke.test.ts`, Claude Desktop's node host wrapper (`nodeHost.js`, read from Desktop's app bundle)
+
+- **How Desktop picks the runtime:** it runs the extension on its **built-in Node.js** (Node 24.22 in Desktop 4.4212, Electron 44, as an Electron utility process, so users install nothing) when the manifest's `server.type` is `node`, `mcp_config.command` is `node` with the script as the argument, and the built-in version satisfies `compatibility.runtimes.node`. Otherwise, or with **Use built-in Node.js for MCP** turned off in Settings → Extensions → Advanced, it looks for a Node.js on the system that satisfies it. `test/mcpb.test.ts` checks that 24.22.0 satisfies `NODE_RUNTIME` and 20.19.0 doesn't.
+- **What Desktop's host wrapper changes**, and how the server copes:
+  - `process.stdin` is replaced by a `Readable` fed from a MessagePort that **never ends**, so the "stdin closed" shutdown never fires there; shutdown comes from signals or the host ending the process.
+  - `process.stdout.write` and `process.stderr.write` are intercepted and posted to Desktop. Stdout still carries only MCP messages.
+  - It installs `SIGTERM` and `SIGINT` handlers that `process.exit(0)` at once. `src/index.ts` removes them when `process.parentPort` exists, so the graceful 1.5 s shutdown (and a token save in flight) runs instead.
+  - It installs `uncaughtException` and `unhandledRejection` handlers that report to Desktop and exit 1. The server's own `unhandledRejection` handler only logs, but under the host the process still exits.
+  - It blocks spawning `process.execPath` (and the other executables in Desktop's app bundle), with an error telling the user to install Node.js and turn the built-in Node off. The server never spawns Node; it spawns only `/usr/bin/security`, `/usr/bin/open` and `/bin/stty`, which are allowed.
+  - It rewrites `process.argv` to `[node, <entry>, …args]`, so `argv[2]` is still the command (`serve` by default) and `argv[1]` is the script path the pid file records.
+  - The process shows up as a "Claude Helper" whose command line doesn't name the extension; hence the pid files in `<configDir>/run/` (Serve lifecycle) that whoop-reset reads.
+- **Logged at start:** `node` (`process.versions.node`) and, on the built-in Node, `electron` (`process.versions.electron`).
+- **User agent:** WHOOP requests now carry Node's fetch default (`node`), not Bun's.
+- **Why Node instead of compiled Bun binaries** (history pivot): the Bun builds were ad-hoc signed, so each release counted as a different program to macOS. It couldn't update or delete the keychain item the previous release saved (`errSecInvalidOwnerEdit`), which needed the `-25244` fallback, and the bundle needed two ~80 MB binaries, a `/bin/sh` launcher to choose between them and restore exec bits (mcpb#10, #294, #235), codesigning, a minimum-macOS check and macOS CI runners. A Node bundle is one ~1 MB file that Desktop already has a runtime for. The port replaced `Bun.serve` with the node:http adapter (`src/auth/http.ts`), `Bun.secrets` with the `security` CLI (`src/auth/keychain.ts`), `Bun.spawn`/`spawnSync`/the console iterator with `node:child_process` and `node:readline` (`src/cli/terminal.ts`), `Bun.sleep` with `node:timers/promises`, and `Bun.escapeHTML` with `escapeHtml` (`src/auth/page-style.ts`).
 
 ### Manifest (`manifest()` in build-mcpb.ts)
 
@@ -2198,13 +2199,13 @@ exec "$bin" "$@"
 | `author`                                                | `{name: "whoop-mcp contributors", url: REPO}`                                                                                                                                                                                                                                                                                                                                                                                                                            | Part of the extension ID                                                                                                                                                                                                                                                                              |
 | `repository` / `homepage` / `documentation` / `support` | `{type:"git", url: REPO+".git"}` / REPO / `REPO#readme` / `REPO/issues`                                                                                                                                                                                                                                                                                                                                                                                                  | REPO = `https://github.com/213123243ertdfgret63/whoop-mcp`                                                                                                                                                                                                                                            |
 | `icon`                                                  | `icon.png` (from `assets/icon.png`)                                                                                                                                                                                                                                                                                                                                                                                                                                      |                                                                                                                                                                                                                                                                                                       |
-| `server`                                                | `{type:"binary", entry_point:"server/launch.sh", mcp_config:{command:"/bin/sh", args:["${__dirname}/server/launch.sh"], env:{WHOOP_MCP_INSTALL_SKILLS:"${user_config.claude_code_commands}"}}}`                                                                                                                                                                                                                                                                          | Desktop substitutes `${__dirname}` with the unpack folder. Running via `/bin/sh` survives a dropped exec bit.                                                                                                                                                                                         |
+| `server`                                                | `{type:"node", entry_point:"server/index.mjs", mcp_config:{command:"node", args:["${__dirname}/server/index.mjs"], env:{WHOOP_MCP_INSTALL_SKILLS:"${user_config.claude_code_commands}"}}}`                                                                                                                                                                                                                                                                               | Desktop substitutes `${__dirname}` with the unpack folder. Type `node` with command `node` is what lets Desktop use its built-in Node (see Runtime: Node).                                                                                                                                            |
 | `user_config`                                           | Exactly one key, `claude_code_commands`: `type: boolean`, `title: "Add /whoop- commands to Claude Code"`, `default: true`, `required: false`, plus a description (adds the three skills to `~/.claude/skills`; off removes them on next start; uninstall doesn't remove them)                                                                                                                                                                                            | Settings don't reliably reach the server (mcpb#297), so credentials are **not** collected here; the setup page collects them. The server treats an unexpanded `${…}` value as on (`installSetting`: unset or empty means undefined/leave alone; anything except case-insensitive `false` means true). |
 | `tools`                                                 | From the live server; `tools_generated: false`                                                                                                                                                                                                                                                                                                                                                                                                                           |                                                                                                                                                                                                                                                                                                       |
 | `prompts`                                               | `PROMPTS.map({name, description, text})` (no `tool` key); `prompts_generated: false`                                                                                                                                                                                                                                                                                                                                                                                     | Same text the server returns for the prompts                                                                                                                                                                                                                                                          |
 | `keywords`                                              | `whoop, fitness, recovery, sleep, training, health`                                                                                                                                                                                                                                                                                                                                                                                                                      |                                                                                                                                                                                                                                                                                                       |
 | `privacy_policies`                                      | `[PRIVACY_URL]` = `https://github.com/213123243ertdfgret63/whoop-mcp#connect-your-whoop-account`                                                                                                                                                                                                                                                                                                                                                                         | Exactly 1 entry                                                                                                                                                                                                                                                                                       |
-| `compatibility`                                         | `{platforms: ["darwin"]}`                                                                                                                                                                                                                                                                                                                                                                                                                                                | Windows was dropped in v0.6.1 (untested)                                                                                                                                                                                                                                                              |
+| `compatibility`                                         | `{platforms: ["darwin"], runtimes: {node: ">=22.0.0"}}` (`NODE_RUNTIME`)                                                                                                                                                                                                                                                                                                                                                                                                 | Windows was dropped in v0.6.1 (untested)                                                                                                                                                                                                                                                              |
 
 Prompts (from `src/server.ts`; no arguments, because Desktop shows an argument form before attaching a prompt):
 
@@ -2248,35 +2249,28 @@ Run:
 
 ### GitHub Actions
 
-All workflows use `actions/checkout@v7`, `oven-sh/setup-bun@v2` with `bun-version-file: .bun-version`, `bun install --frozen-lockfile` and `HUSKY: "0"`.
+Both workflows use `actions/checkout@v7`, `oven-sh/setup-bun@v2` with `bun-version-file: .bun-version`, `actions/setup-node@v4` with `node-version: 24` (the Node line Desktop's built-in runtime is on), `bun install --frozen-lockfile` and `HUSKY: "0"`. There are two: `bundle.yml` was deleted in v0.8, because nothing macOS-only is left to check.
 
 **`ci.yml`**
 - Triggers: push to `main`, `pull_request`, `workflow_dispatch`. Permissions: `contents: read`.
 - Concurrency group `ci-${{ github.ref }}`. `cancel-in-progress` only for pull requests: superseded PR runs are cancelled, and every push to main keeps its own result.
-- Matrix: `ubuntu-latest` only, plus `macos-latest` on `workflow_dispatch`. Why: macOS runners are scarce, can queue until cancelled, and cost 10x minutes on private repos. `fail-fast: false`, timeout 20 min.
+- Matrix: `ubuntu-latest` only, plus `macos-latest` on `workflow_dispatch` (useful for the macOS-only keychain tests, which run against a fake `security`). Why: macOS runners are scarce, can queue until cancelled, and cost 10x minutes on private repos. `fail-fast: false`, timeout 20 min.
 - Steps:
   1. install (also runs `gen:types`)
   2. `bunx biome ci .` (Linux only)
   3. `bun run typecheck`
-  4. `bun test`
-  5. `bun run build`
-  6. `bun test test/smoke.test.ts -t "compiled binary"` with `WHOOP_MCP_BINARY=dist/whoop-mcp`
-  7. `bun run build:mcpb` (validates the manifest and the exec bits; on Linux, signing and the minos check are skipped)
-
-**`bundle.yml`**
-- Runs the macOS-only parts of the build (codesign, minos check, running both binaries) that Ubuntu CI can't.
-- Triggers: push to `main` touching `scripts/build-mcpb.ts`, `package.json`, `bun.lock`, `.bun-version`, `src/index.ts` or `.github/workflows/bundle.yml`; also `workflow_dispatch`. Path filters keep macOS cost down, and a broken build shows up before a tag is pushed rather than as a failed release.
-- Job: `macos-latest`, 20 min, `CI=true` (so the minos check is fatal).
-- Runs `build:mcpb`, unzips to `dist/check`, and checks `/bin/sh dist/check/server/launch.sh --version` equals the package.json version. If Rosetta is available (`arch -x86_64 /usr/bin/true`), it runs the same check under `arch -x86_64`; otherwise it emits `::warning::Rosetta isn't installed on this runner; the x64 binary was not run`.
+  4. `bun test` (includes the smoke tests that run the Node bundle on the runner's Node 24)
+  5. `bun run test:node` (`node --test test/node/`): the loopback server (`serveLocal`, `listenLocal`) on real Node, bundled first with `bun build --target=node` like the shipped file. `bun test` runs everything else on Bun's own node:http, which differs in what this server relies on (exclusive binds, `closeIdleConnections`, keep-alive, body errors). The file is named `*.node-test.mjs` so `bun test` skips it.
+  6. `bun run build:mcpb` (validates the manifest), unzip to `dist/check`, and check `node dist/check/server/index.mjs --version` equals the package.json version
 
 **`release.yml`**
-- Trigger: push of tags `v*`. Permissions: `contents: write`. Concurrency group `release-${{ github.ref }}`. Job on `macos-latest` (ad-hoc signing plus Unix-mode zips), 30 min.
+- Trigger: push of tags `v*`. Permissions: `contents: write`. Concurrency group `release-${{ github.ref }}`. Job on `ubuntu-latest` (the extension is one JavaScript file, so nothing needs a Mac to build), 30 min.
 - Checkout uses `fetch-depth: 0` (needed for the ancestry check) and `persist-credentials: false`, so the write token isn't left in `.git/config` for build scripts or tests to read. `gh` gets the token through `GH_TOKEN` only in the publish step.
 - Steps:
   1. Tag equals `v` + package.json version, else `::error::Tag … does not match package.json version …`.
   2. `git merge-base --is-ancestor $GITHUB_SHA origin/main`, else `::error::… isn't on main; refusing to release it`.
-  3. `biome ci .`, typecheck, test.
-  4. `build:mcpb`. Unzip, check `launch.sh --version` equals `${GITHUB_REF_NAME#v}`, run the x64 binary under Rosetta when available (else warn), then `(cd dist && shasum -a 256 whoop-mcp-*.mcpb > SHA256SUMS)`.
+  3. `biome ci .`, typecheck, `bun test`, `bun run test:node`.
+  4. `build:mcpb`. Unzip, check `node dist/check/server/index.mjs --version` equals `${GITHUB_REF_NAME#v}` (Node 24), then `(cd dist && sha256sum whoop-mcp-*.mcpb > SHA256SUMS)`.
   5. `bun -e` imports `releaseNotes` from `scripts/release.ts` and writes `dist/NOTES.md`. It fails if CHANGELOG has no section for the version.
   6. Publish. If the release already exists (a re-run), it runs `gh release upload --clobber` for the assets plus `gh release edit --notes-file … --draft=false`. Otherwise it runs `gh release create <tag> --title <tag> --notes-file dist/NOTES.md --verify-tag dist/whoop-mcp-*.mcpb dist/SHA256SUMS`.
 - Release assets: `whoop-mcp-macos.mcpb` and `SHA256SUMS`.
@@ -2285,18 +2279,18 @@ All workflows use `actions/checkout@v7`, `oven-sh/setup-bun@v2` with `bun-versio
 
 - `bunfig.toml`: `[test] preload = ["./test/preload.ts"]`. The preload sets:
   - `TZ=UTC` (date tests assume UTC)
-  - `WHOOP_MCP_CREDENTIAL_STORE=file` (never the real keychain, since disconnect deletes credentials; keychain tests mock `Bun.secrets`)
+  - `WHOOP_MCP_CREDENTIAL_STORE=file` (never the real keychain, since disconnect deletes credentials)
+  - `WHOOP_MCP_SECURITY=test/refuse-security.sh`, a stub that refuses every command, so even a test that lifts the file store can't reach Apple's `security` (one earlier run overwrote a developer's real keychain item). Keychain tests `spyOn` the `keychain` object or use their own fake `security` (`keychain.test.ts`).
   - `WHOOP_MCP_LOG_FILE ??= "off"`
   - `WHOOP_MCP_LOG_LEVEL=info`
   - deletes `WHOOP_MCP_LOG_STDERR_LEVEL`, `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` and `WHOOP_REDIRECT_URI`, so shell credentials can't trigger the real login path and bind port 8787
   - `WHOOP_MCP_NO_BROWSER=1`
 - All tests are offline and isolated in `mkdtemp` dirs that are removed afterwards. Subprocess tests pass a minimal env (`PATH`, `WHOOP_MCP_HOME`, file store, no browser).
 - **`mcpb.test.ts`** checks:
-  - the exact `server` object and `platforms: ["darwin"]`;
+  - the exact `server` object (`type: "node"`, `command: "node"`, `args: ["${__dirname}/server/index.mjs"]`) and `compatibility` `{platforms: ["darwin"], runtimes: {node: NODE_RUNTIME}}`, with 24.22.0 satisfying `NODE_RUNTIME` and 20.19.0 not;
   - `DIRNAME === "${__dirname}"`, with placeholders built via `["$","{…}"].join("")` to dodge lint;
   - version, tools, a single privacy policy, `user_config` keys exactly `["claude_code_commands"]` (boolean, default true, required false), "unofficial" in the description, `name` `whoop-mcp` and display name `WHOOP (unofficial)`;
   - prompt names in order, no `tool` key, texts equal to PROMPTS, `prompts_generated` false;
-  - `launch.sh` (darwin only) runs a stand-in binary saved with mode 0600 and restores its owner-exec bit;
   - `summary` behaviour.
 - **`release.test.ts`**: unit tests for the pure functions, plus guard tests. The guard tests create a bare `remote.git` and a `repo` with a copy of `release.ts` inside it (the script resolves the repo from its own location), use per-command `.cwd()` rather than `$.cwd()` (which is process-global), and run with `--dry-run`. They cover: dry run writes nothing; refuses a dirty tree, a non-main branch, unpushed commits, an existing local tag, and a tag only on origin on a side commit; lists only commits since the last tag.
 - **`smoke.test.ts`**: a real stdio subprocess (`bun run src/index.ts`) through `StdioClientTransport`, run for both protocol eras:
@@ -2304,7 +2298,7 @@ All workflows use `actions/checkout@v7`, `oven-sh/setup-bun@v2` with `bun-versio
   - legacy `2025-11-25` (`supportedProtocolVersions`).
   - It asserts the negotiated version, that tools include `whoop_today` and `whoop_status`, and that `readOnlyHint` is true for every tool except `whoop_login` and `whoop_disconnect`. It also checks `whoop_status` reports `logged_in:false`, and that `whoop_profile` returns `isError` mentioning `whoop_login`. A token file gives `logged_in`, `has_refresh_token`, and `missing_scopes` containing `read:sleep`.
   - `WHOOP_REDIRECT_URI` is set to a free 127.0.0.1 port.
-  - "compiled binary serves stdio" runs only when `WHOOP_MCP_BINARY` is set.
+  - "the bundle on Node.js (what Claude Desktop runs)": builds `src/index.ts` with `--target=node --format=esm` into the temp dir and runs it with `node` from `PATH` (skipped without one): both eras (14 tools, 3 prompts), `--version`, and the `whoop_login` setup page over node:http (200 with a nonce CSP for the one-time link, 403 without the token, a cross-site POST refused).
   - Serve-mode test: raw JSON-RPC `initialize`, `notifications/initialized` and `tools/call whoop_status`, then close stdin. Expects exit 0 within 5 s, and a log at `<home>/logs/whoop-mcp.log` (mode 0600) containing `INFO  starting`, `tool whoop_status ok` and `client disconnected`, with no `INFO` on stderr.
   - `logout` CLI: deletes the app credentials by default and prints "Deleted saved app credentials."; `--keep-app` keeps them; `--forget-app` is accepted as a legacy alias; `keep-app`, `--keepapp` and `--keep_app` exit 2 without deleting ("Unknown option --keep_app").
 - **`bun-skill.test.ts`**: runs the bun skill scripts with a temp `HOME`, `XDG_CACHE_HOME` seeded with fresh cache files, a fake `bun` shim on PATH (answers `--version` and `--revision`), and `HTTP(S)_PROXY=http://127.0.0.1:9` so any stray fetch fails fast. Covers every status, pin rule, install-method upgrade command, and docs search/grep/usage (exit 2).
@@ -2337,7 +2331,7 @@ All workflows use `actions/checkout@v7`, `oven-sh/setup-bun@v2` with `bun-versio
   - `SKILL_MARKER` must equal `MARKER` in `src/skills.ts`: `<!-- Installed by the WHOOP (unofficial) Claude Desktop extension (whoop-mcp). -->`
 - Test hooks (env vars): `WHOOP_RESET_SECURITY` (default `/usr/bin/security`), `WHOOP_RESET_DESKTOP_CHECK` (a shell command; default `/bin/ps -axo comm= | grep -q '/Claude\.app/Contents/MacOS/Claude$'`, because `pgrep` can't see Desktop's main process from inside a Claude session), `WHOOP_RESET_DESKTOP_RUNNING` (`1`/`0` forces the answer), `WHOOP_RESET_NO_WAITER=1`.
 - Order of work:
-  1. Kill processes whose command contains `<extensionDir>/server/`.
+  1. Kill the extension's server processes: those whose command contains `<extensionDir>/server/` (a server on a Node of the user's own, or an older build), plus every pid named by a `<configDir>/run/<pid>` file in each config dir, but only while that pid is a `Claude Helper … --type=utility` or `node` process that started no later than the file was written (`ps -o lstart`, one-second resolution, so 1 s of slack). A file left by a server that was killed outright (SIGKILL skips the exit handler that removes it) can name a pid since reused, and a reused pid always started after the file. Its own pid is excluded. Why the pid files: under Desktop's built-in Node the server is a Claude Helper whose command line doesn't name the extension. Tested with a real `node` process and a `/bin/sleep` holding a stale pid (only the first is stopped).
   2. Revoke: for each config dir that has `tokens.json` (unless `--no-revoke`), run `bun <repo>/src/index.ts logout --keep-app` with `WHOOP_MCP_HOME=<dir>`, `WHOOP_MCP_LOG_FILE=off` and a 60 s timeout (a keychain prompt nobody answers mustn't hang it). Output "Revoked access at WHOOP." means removed; "Couldn't revoke" or a nonzero exit means failed, with a dashboard hint.
   3. Keychain: if `find-generic-password -s whoop-mcp` succeeds, loop up to 20 times on `delete-generic-password -s whoop-mcp` until exit 44. This deletes items saved by older builds too. Each call has a 15 s timeout.
   4. Delete config dirs:
@@ -2358,14 +2352,14 @@ All workflows use `actions/checkout@v7`, `oven-sh/setup-bun@v2` with `bun-versio
 
 ### README install, update and uninstall (user-facing behaviour)
 
-- **Requirements:** Claude Desktop on macOS 13+, Apple Silicon or Intel.
+- **Requirements:** Claude Desktop on macOS, Apple Silicon or Intel. Nothing else: Desktop runs the extension on its built-in Node.js. (The README no longer names a minimum macOS; the macOS 13 floor came from the Bun binaries.)
 - **Install:** download `whoop-mcp-macos.mcpb` from the latest release, double-click it (or drag it onto Settings → Extensions), click Install, then ask "connect WHOOP". No settings are needed.
 - **Pre-0.3 migration:** quit Desktop (it rewrites `claude_desktop_config.json` on quit), delete the `whoop` entry under `mcpServers`, delete `~/.whoop-mcp`, and if needed run `claude mcp remove whoop --scope user`. The login and credentials carry over.
-- **Update:** install the new `.mcpb` the same way. File-installed extensions don't auto-update. The login and credentials survive because they live outside the extension. macOS may ask for keychain access the first time a new build reads them. Find the version under Settings → Extensions or as `whoop_status.server_version`.
+- **Update:** install the new `.mcpb` the same way. File-installed extensions don't auto-update. The login and credentials survive because they live outside the extension. Coming from v0.7 or earlier, macOS asks once whether `security` may use the `whoop-mcp` keychain item (click **Always Allow**); from v0.8 the item belongs to `security`, so later updates don't ask. Find the version under Settings → Extensions or as `whoop_status.server_version`.
 - **Uninstall:** disconnect first, then Settings → Extensions → WHOOP (unofficial) → Uninstall. Desktop has no uninstall hook, so manual cleanup is:
   `rm -rf ~/.claude/skills/whoop-{connect,disconnect,status} ~/.config/whoop-mcp ~/Library/Logs/whoop-mcp` and `security delete-generic-password -s whoop-mcp`.
 - **Run from source:**
-  - `bun install && bun run build:mcpb`.
+  - `bun install && bun run build:mcpb`, or `bun run build` for `dist/whoop-mcp.mjs` (`node dist/whoop-mcp.mjs status`).
   - Or add a differently named server (e.g. `whoop-dev`, command bun, args `src/index.ts`) to `claude_desktop_config.json`. A config entry with the same name overrides an extension.
   - CLI: `bun src/index.ts setup|login|status|logout|version`.
   - Env credentials take precedence only when both are set.
@@ -2386,14 +2380,16 @@ All workflows use `actions/checkout@v7`, `oven-sh/setup-bun@v2` with `bun-versio
 | b7d2809 (v0.6.0)               | MCP prompts whoop-connect and whoop-disconnect, also listed in the manifest                                                                                                                                                      |
 | 3c3a066, 9eb327b (v0.6.1)      | `/usr/bin/security` fallback for keychain items owned by an older build (errSecInvalidOwnerEdit: every build is a different program to macOS). **Windows bundle dropped** (untested).                                            |
 | 838a37a, 168a6e8 (v0.7.0)      | `/whoop-reset` skill; Claude Code `/whoop-*` skills written by the extension, controlled by `user_config.claude_code_commands`; `whoop-status` prompt                                                                            |
+| v0.8 (uncommitted)             | **Node bundle instead of compiled Bun binaries:** one `server/index.mjs` run by Desktop's built-in Node (`server.type: node`, `runtimes.node >=22.0.0`); `Bun.serve` → node:http, `Bun.secrets` → `/usr/bin/security`; pid files for whoop-reset; `launch.sh`, codesign, minos check and `bundle.yml` removed; release on Ubuntu with Node 24 |
 
-Roadmap (`docs/roadmap.md`): a possible remote mode (Streamable HTTP, `createMcpHandler` on `Bun.serve`) so claude.ai web and mobile can use it, originally milestone M6. Requirements: auth on every `/mcp` request (a bearer secret, or MCP OAuth with RFC 9728 and PKCE), reuse of the OAuth `state` check, no permanent data copy (WHOOP terms §4.2.2), and re-reading the third-party terms (§3.1.3, §4.2.1). Hosting for other people would not be allowed. Lessons are drawn from crerocksolid/whoop-mcp.
+Roadmap (`docs/roadmap.md`): a possible remote mode (Streamable HTTP, `createMcpHandler`; the roadmap still says on `Bun.serve`, which the shipped Node runtime doesn't have, so it would sit on node:http like `src/auth/http.ts`) so claude.ai web and mobile can use it, originally milestone M6. Requirements: auth on every `/mcp` request (a bearer secret, or MCP OAuth with RFC 9728 and PKCE), reuse of the OAuth `state` check, no permanent data copy (WHOOP terms §4.2.2), and re-reading the third-party terms (§3.1.3, §4.2.1). Hosting for other people would not be allowed. Lessons are drawn from crerocksolid/whoop-mcp.
 
 ### Known Claude Desktop and mcpb quirks (recorded in code and docs)
 
-- **mcpb#10:** no architecture field, so one bundle carries both binaries plus `launch.sh`.
-- **mcpb#294 / #235:** an extracted file is executable only if its zip entry has owner-exec, and some builds drop it anyway. Hence the build packs on macOS/Linux, `checkExecutable` fails the build, `/bin/sh` is the command, and `launch.sh` runs `chmod`.
-- **mcpb#278:** `mcpb sign` 2.1.2 bundles are refused by Desktop, so bundles are unsigned. Binaries are ad-hoc codesigned only.
+- **mcpb#10:** no architecture field. Until v0.7 one bundle therefore carried both binaries plus `launch.sh`; the Node bundle is CPU-independent, so it no longer matters.
+- **mcpb#294 / #235:** an extracted file is executable only if its zip entry has owner-exec, and some builds drop it anyway. Until v0.7 the build checked exec bits, started `/bin/sh`, and `launch.sh` ran `chmod`. Now Desktop's `node` reads `server/index.mjs`, which needs no exec bit.
+- **mcpb#278:** `mcpb sign` 2.1.2 bundles are refused by Desktop, so bundles are unsigned. Nothing is codesigned any more.
+- **Built-in Node host:** stdin never ends, SIGTERM/SIGINT handlers exit at once (removed by the server), uncaught exceptions and unhandled rejections exit, spawning Node (`process.execPath`) is blocked, and the process is a "Claude Helper" (see Runtime: Node).
 - **mcpb#297:** `user_config` values don't reliably reach the server, so credentials are collected on the setup page, and an unexpanded `${user_config…}` counts as the default (on).
 - The extension ID derives from author name plus `name`. Renaming either installs a second extension.
 - Desktop keeps its extension list and `claude_desktop_config.json` in memory and writes them back on quit. Edit them only while Desktop is closed; the reset waits for a 3 s absence, since a restart to update returns immediately.
@@ -2402,7 +2398,7 @@ Roadmap (`docs/roadmap.md`): a possible remote mode (Streamable HTTP, `createMcp
 - Desktop has no uninstall hook, so skills and data remain after uninstall.
 - Claude gives about 2 s between stdin EOF and SIGTERM, so the server's shutdown grace is 1500 ms.
 - From a Claude session `pgrep` can't see Desktop's main process; the reset script uses `ps -axo comm=` instead.
-- A Homebrew or self-built bun produces binaries with a higher minimum macOS, so release builds must use an official bun; the minos check is fatal in CI.
+- Until v0.7: a Homebrew or self-built bun produced binaries with a higher minimum macOS, so release builds had to use an official bun and the minos check was fatal in CI. The Node bundle has no such constraint.
 
 ### Corrections and additions
 
@@ -2450,6 +2446,5 @@ Found when this part was checked against the code. Where they differ from the te
 
 **Bun build leftovers** (.gitignore, scripts/build-mcpb.ts)
 - The repo root holds 59 `.<hex>-00000000.bun-build` files: about 87 MB each, about 4.8 GB in total, gitignored by `*.bun-build`.
-- Interrupted `bun build --compile` runs leave them in the cwd.
+- Interrupted `bun build --compile` runs of the v0.7-and-earlier binary build left them in the cwd. The Node build (`--target=node`, no `--compile`) doesn't make them, so they are safe to delete and won't come back.
 - `build-mcpb.ts` cleans only its staging dir and output, and `/whoop-reset` doesn't touch them.
-- A recreation should add cleanup, or compile with a temp cwd.

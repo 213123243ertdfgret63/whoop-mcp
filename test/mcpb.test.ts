@@ -1,26 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { DIRNAME, LAUNCH_SH, manifest, summary } from "../scripts/build-mcpb.ts";
+import { DIRNAME, manifest, NODE_RUNTIME, summary } from "../scripts/build-mcpb.ts";
 import { VERSION } from "../src/config.ts";
 import { PROMPTS } from "../src/server.ts";
 
 const tools = [{ name: "whoop_today", description: "Start here." }];
 
 describe("extension manifest", () => {
-  test("macOS starts through the launcher with /bin/sh, so a dropped execute bit can't stop it", () => {
+  test("a Node server Desktop runs on its built-in Node.js: command node with the script as the argument", () => {
     const m = manifest(tools);
     expect(m.server).toEqual({
-      type: "binary",
-      entry_point: "server/launch.sh",
+      type: "node",
+      entry_point: "server/index.mjs",
       mcp_config: {
-        command: "/bin/sh",
-        args: [`${DIRNAME}/server/launch.sh`],
+        command: "node",
+        args: [`${DIRNAME}/server/index.mjs`],
         env: { WHOOP_MCP_INSTALL_SKILLS: ["$", "{user_config.claude_code_commands}"].join("") },
       },
     });
-    expect(m.compatibility.platforms).toEqual(["darwin"]);
+    expect(m.compatibility).toEqual({ platforms: ["darwin"], runtimes: { node: NODE_RUNTIME } });
+    // Desktop's built-in Node (24.22 in Desktop 4.4212) must satisfy it, or Desktop needs a Node of the user's own.
+    expect(Bun.semver.satisfies("24.22.0", NODE_RUNTIME)).toBe(true);
+    expect(Bun.semver.satisfies("20.19.0", NODE_RUNTIME)).toBe(false);
   });
 
   test("the placeholder is the one Desktop substitutes", () => {
@@ -54,25 +54,6 @@ describe("extension manifest", () => {
     expect(m.prompts[0]).not.toHaveProperty("tool");
     expect(m.prompts.map((p) => p.text)).toEqual(PROMPTS.map((p) => p.text));
     expect(m.prompts_generated).toBe(false);
-  });
-});
-
-describe("launch.sh", () => {
-  test("picks the binary for the CPU and restores its execute bit", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "whoop-launch-"));
-    try {
-      const arch = process.arch === "arm64" ? "arm64" : "x64";
-      const bin = join(dir, `whoop-mcp-darwin-${arch}`);
-      // A stand-in binary saved without the execute bit, as some Desktop builds unpack it.
-      await writeFile(bin, '#!/bin/sh\necho "ran $1"\n', { mode: 0o600 });
-      await writeFile(join(dir, "launch.sh"), LAUNCH_SH, { mode: 0o600 });
-      if (process.platform !== "darwin") return; // uname -m names differ off macOS
-      const out = await Bun.$`/bin/sh ${join(dir, "launch.sh")} --version`.text();
-      expect(out.trim()).toBe("ran --version");
-      expect((await Bun.file(bin).stat()).mode & 0o100).toBe(0o100);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
   });
 });
 

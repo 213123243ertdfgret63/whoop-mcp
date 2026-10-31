@@ -6,10 +6,16 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
 const ENTRY = join(import.meta.dir, "..", "src", "index.ts");
+/** Node.js, which runs the shipped bundle (Claude Desktop uses its built-in one). Skipped where there is none. */
+const NODE = Bun.which("node");
 
 let home: string;
+/** The server bundled for Node exactly as build-mcpb ships it. */
+let bundle: string;
 beforeAll(async () => {
   home = await mkdtemp(join(tmpdir(), "whoop-mcp-test-"));
+  bundle = join(home, "server", "index.mjs");
+  await Bun.$`bun build ${ENTRY} --target=node --format=esm --outfile ${bundle}`.quiet();
 });
 afterAll(async () => {
   await rm(home, { recursive: true, force: true });
@@ -118,16 +124,51 @@ test("whoop_status reads a stored token file", async () => {
   }
 });
 
-// Set WHOOP_MCP_BINARY=dist/whoop-mcp (after `bun run build`) to smoke-test the compiled binary too.
-const binary = process.env.WHOOP_MCP_BINARY;
-test.skipIf(!binary)("compiled binary serves stdio", async () => {
-  const client = await connect([binary!]);
-  try {
-    const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).toContain("whoop_today");
-  } finally {
-    await client.close();
+describe.skipIf(!NODE)("the bundle on Node.js (what Claude Desktop runs)", () => {
+  for (const [label, options, expectedVersion] of eras) {
+    test(`serves stdio, ${label}`, async () => {
+      const client = await connect([NODE!, bundle], options);
+      try {
+        expect(negotiated(client)).toBe(expectedVersion);
+        const { tools } = await client.listTools();
+        expect(tools).toHaveLength(14);
+        const { prompts } = await client.listPrompts();
+        expect(prompts.map((p) => p.name).sort()).toEqual(["whoop-connect", "whoop-disconnect", "whoop-status"]);
+      } finally {
+        await client.close();
+      }
+    });
   }
+
+  test("prints its version", async () => {
+    expect((await Bun.$`${NODE!} ${bundle} --version`.text()).trim()).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  test("whoop_login serves the setup page from node:http, and only to its one-time link", async () => {
+    await rm(join(home, "tokens.json"), { force: true });
+    await rm(join(home, "client.json"), { force: true });
+    const client = await connect([NODE!, bundle]);
+    try {
+      const login = await client.callTool({ name: "whoop_login", arguments: { wait_seconds: 0 } });
+      const url = (login.structuredContent as { url?: string } | undefined)?.url ?? "";
+      expect(url).toContain("/setup?t=");
+      const page = await fetch(url);
+      expect(page.status).toBe(200);
+      expect(page.headers.get("content-security-policy")).toContain("nonce-");
+      expect(await page.text()).toContain("Client ID");
+      // Without the token, or from another site, it refuses.
+      const { origin } = new URL(url);
+      expect((await fetch(`${origin}/setup`)).status).toBe(403);
+      const crossSite = await fetch(`${origin}/setup/credentials?t=x`, {
+        method: "POST",
+        headers: { origin: "https://evil.example", "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(crossSite.status).toBeGreaterThanOrEqual(400);
+    } finally {
+      await client.close();
+    }
+  });
 });
 
 test("in serve mode it logs to its file, keeps routine lines off stderr, and exits when stdin closes", async () => {

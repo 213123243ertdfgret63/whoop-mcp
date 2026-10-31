@@ -1,17 +1,19 @@
 #!/usr/bin/env bun
-import { chmod, cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 /**
  * Builds the Claude Desktop extension (MCP Bundle) for macOS:  bun run build:mcpb
  *
- * dist/whoop-mcp-macos.mcpb holds darwin-arm64 and darwin-x64 binaries plus server/launch.sh, which picks the
- * one for the Mac's CPU (the manifest has no architecture field, mcpb#10). Only macOS is built and supported.
+ * dist/whoop-mcp-macos.mcpb holds the server as one JavaScript file, server/index.mjs, bundled for Node by
+ * `bun build --target=node`. Claude Desktop runs it on its own built-in Node.js (an Electron utility process),
+ * so users need nothing installed. Desktop uses the built-in Node when the manifest's server type is "node",
+ * its command is `node` with the script as the argument, and the built-in version satisfies
+ * compatibility.runtimes.node; otherwise (or with "Use built-in Node.js for MCP" turned off) it looks for a
+ * Node.js on the system that does.
  *
- * Must run on macOS or Linux: the zip has to carry Unix file modes, because Claude Desktop only marks an
- * extracted file executable when its zip entry has the owner-exec bit (mcpb#294, #235). launch.sh also restores
- * the bit itself, for Desktop builds that drop it. The bundles are not signed: `mcpb sign` 2.1.2 produces files
- * Desktop refuses to install (mcpb#278).
+ * Plain JavaScript needs no code signing, no per-CPU binaries and no execute bits, so this builds on any OS.
+ * The bundle is not signed: `mcpb sign` 2.1.2 produces files Desktop refuses to install (mcpb#278).
  */
 import { $ } from "bun";
 import { VERSION } from "../src/config.ts";
@@ -27,17 +29,10 @@ const REPO = "https://github.com/213123243ertdfgret63/whoop-mcp";
 // biome-ignore lint/suspicious/noTemplateCurlyInString: an mcpb placeholder, not a template literal
 export const DIRNAME = "${__dirname}";
 
-const LAUNCH_SH = `#!/bin/sh
-# Claude Desktop starts the whoop-mcp extension through this script. It picks the binary for this Mac's CPU and
-# makes sure it is executable, since some Desktop builds unpack extension files without the execute bit.
-dir=$(cd "$(dirname "$0")" && pwd)
-case "$(uname -m)" in
-  arm64) bin="$dir/whoop-mcp-darwin-arm64" ;;
-  *) bin="$dir/whoop-mcp-darwin-x64" ;;
-esac
-[ -x "$bin" ] || chmod 755 "$bin" 2>/dev/null
-exec "$bin" "$@"
-`;
+/** Desktop's built-in Node was 24.22 (Electron 44) when this was set; the code needs Node 22 or later. */
+export const NODE_RUNTIME = ">=22.0.0";
+
+const ENTRY = "server/index.mjs";
 
 const LONG_DESCRIPTION = `Gives Claude read-only access to your own WHOOP data: recovery, HRV, resting heart rate, sleep, strain, steps and workouts. Ask things like "how am I today?", "how was my week?" or "am I overdoing it?".
 
@@ -69,11 +64,11 @@ export function summary(description: string, max = 160): string {
 
 function manifest(tools: { name: string; description: string }[]) {
   const server = {
-    type: "binary",
-    entry_point: "server/launch.sh",
+    type: "node",
+    entry_point: ENTRY,
     mcp_config: {
-      command: "/bin/sh",
-      args: [`${DIRNAME}/server/launch.sh`],
+      command: "node",
+      args: [`${DIRNAME}/${ENTRY}`],
       // biome-ignore lint/suspicious/noTemplateCurlyInString: an mcpb placeholder, not a template literal
       env: { WHOOP_MCP_INSTALL_SKILLS: "${user_config.claude_code_commands}" },
     },
@@ -112,48 +107,13 @@ function manifest(tools: { name: string; description: string }[]) {
     prompts_generated: false,
     keywords: ["whoop", "fitness", "recovery", "sleep", "training", "health"],
     privacy_policies: [PRIVACY_URL],
-    compatibility: { platforms: ["darwin"] },
+    compatibility: { platforms: ["darwin"], runtimes: { node: NODE_RUNTIME } },
   };
 }
 
-async function compile(target: string, outfile: string): Promise<void> {
-  await $`bun build ${join(ROOT, "src/index.ts")} --compile --minify --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target=bun-${target} --outfile ${outfile}`.quiet();
-  await chmod(outfile, 0o755);
-}
-
-/** Bun signs native builds ad hoc; cross-compiled ones may not be, and Apple Silicon won't run unsigned code. */
-async function adHocSign(file: string): Promise<void> {
-  if (process.platform !== "darwin") return;
-  await $`codesign --force --sign - ${file}`.quiet();
-  await $`codesign --verify ${file}`.quiet();
-}
-
-const MAX_MACOS_MINIMUM = 13;
-
-/**
- * For the native target `bun build --compile` copies the running bun, so the binary only runs on the macOS
- * version that bun was built for. A Homebrew or self-built bun is built for the host's version; official
- * releases target macOS 13. Release builds must not raise the bar for everyone else.
- */
-async function checkMinimumMacOS(file: string): Promise<void> {
-  if (process.platform !== "darwin") return;
-  const minos = Number(/minos (\d+)/.exec(await $`otool -l ${file}`.text())?.[1]);
-  if (!(minos > MAX_MACOS_MINIMUM)) return;
-  const message = `${file} needs macOS ${minos} or later, because the bun running this build was built for it. Use an official bun (https://bun.sh) to build bundles for other Macs.`;
-  if (process.env.CI) throw new Error(message);
-  console.error(`Warning: ${message}`);
-}
-
-/**
- * Fails unless every listed entry in the bundle is stored with the owner-exec bit. mcpb stores only the
- * permission bits (zipinfo shows "?rwx..."), which is all Desktop reads.
- */
-async function checkExecutable(mcpb: string, entries: string[]): Promise<void> {
-  const listing = await $`zipinfo ${mcpb}`.text();
-  for (const entry of entries) {
-    const line = listing.split("\n").find((l) => l.trim().endsWith(` ${entry}`));
-    if (line?.slice(1, 4) !== "rwx") throw new Error(`${entry} is not stored as executable in ${mcpb}:\n${line}`);
-  }
+/** One ESM file for Node, dependencies included. Not minified, so stack traces in the log stay readable. */
+async function bundle(outfile: string): Promise<void> {
+  await $`bun build ${join(ROOT, "src/index.ts")} --target=node --format=esm --outfile ${outfile}`.quiet();
 }
 
 async function build(tools: { name: string; description: string }[]): Promise<string> {
@@ -161,18 +121,7 @@ async function build(tools: { name: string; description: string }[]): Promise<st
   await rm(stage, { recursive: true, force: true });
   await mkdir(join(stage, "server"), { recursive: true });
   await cp(join(ROOT, "assets/icon.png"), join(stage, "icon.png"));
-
-  const executables: string[] = [];
-  for (const arch of ["arm64", "x64"]) {
-    const bin = join(stage, "server", `whoop-mcp-darwin-${arch}`);
-    await compile(`darwin-${arch}`, bin);
-    await adHocSign(bin);
-    await checkMinimumMacOS(bin);
-    executables.push(`server/whoop-mcp-darwin-${arch}`);
-  }
-  await Bun.write(join(stage, "server/launch.sh"), LAUNCH_SH);
-  await chmod(join(stage, "server/launch.sh"), 0o755);
-  executables.push("server/launch.sh");
+  await bundle(join(stage, ENTRY));
 
   await Bun.write(join(stage, "manifest.json"), `${JSON.stringify(manifest(tools), null, 2)}\n`);
   const mcpbCli = join(ROOT, "node_modules/.bin/mcpb");
@@ -180,16 +129,11 @@ async function build(tools: { name: string; description: string }[]): Promise<st
   const out = join(DIST, "whoop-mcp-macos.mcpb");
   await rm(out, { force: true });
   await $`${mcpbCli} pack ${stage} ${out}`.quiet();
-  await checkExecutable(out, executables);
-  await rm(stage, { recursive: true, force: true }); // ~300 MB of unpacked binaries, no longer needed
+  await rm(stage, { recursive: true, force: true });
   return out;
 }
 
 if (import.meta.main) {
-  if (process.platform === "win32") {
-    console.error("Build the bundle on macOS or Linux: Windows zips carry no Unix file modes.");
-    process.exit(1);
-  }
   if (process.argv.length > 2) {
     console.error("Usage: bun run build:mcpb (builds the macOS bundle)");
     process.exit(2);
@@ -201,4 +145,4 @@ if (import.meta.main) {
   console.error(`Built ${out} (${(Bun.file(out).size / 1e6).toFixed(1)} MB)`);
 }
 
-export { LAUNCH_SH, manifest };
+export { manifest };

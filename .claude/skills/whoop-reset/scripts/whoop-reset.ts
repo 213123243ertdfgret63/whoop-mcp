@@ -14,7 +14,7 @@
  * only removed while Desktop isn't running. When it is, the script stops the extension's process, cleans up the
  * rest, and leaves a background job that finishes once Desktop has quit (it waits up to an hour).
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { chmod, rename, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -106,19 +106,43 @@ async function removePath(what: string, path: string) {
   }
 }
 
-/** The extension's server processes: those whose command runs something from the extension's server folder. */
-function stopExtension() {
+/**
+ * The extension's server processes. Each running server leaves `<config dir>/run/<pid>`: under Claude Desktop's
+ * built-in Node it is a "Claude Helper" utility process whose command line doesn't name the extension. Processes
+ * run from the extension's folder by a Node of the user's own (or an older build) are found by their command
+ * line. A pid file left by a server that was killed outright can name a pid since reused by another program, so
+ * it only counts while that pid is a Claude Helper utility or node process that started before the file was
+ * written.
+ */
+function stopExtension(dirs: string[]) {
   const server = join(extensionDir, "server");
-  const ps = Bun.spawnSync(["/bin/ps", "-axo", "pid=,command="]).stdout.toString();
-  const pids = ps
-    .split("\n")
-    .map((l) => l.trim().match(/^(\d+)\s+(.*)$/))
-    .filter((m): m is RegExpMatchArray => m !== null && m[2]!.includes(`${server}/`) && Number(m[1]) !== process.pid)
-    .map((m) => m[1]!);
-  if (!pids.length) return;
-  if (!apply) return add({ what: "running extension process", status: "found", note: `pid ${pids.join(", ")}` });
+  // pid, start time (24 characters, e.g. "Sat Oct 31 10:00:01 2026"), command
+  const ps = Bun.spawnSync(["/bin/ps", "-axo", "pid=,lstart=,command="], { env: { ...process.env, LC_ALL: "C" } });
+  const running = new Map<string, { started: number; command: string }>();
+  for (const line of ps.stdout.toString().split("\n")) {
+    const m = line.trim().match(/^(\d+)\s+(\w{3} \w{3}\s+\d+ [\d:]{8} \d{4})\s+(.*)$/);
+    if (m) running.set(m[1]!, { started: Date.parse(m[2]!), command: m[3]! });
+  }
+  const pids = new Set<string>();
+  for (const [pid, p] of running) if (p.command.includes(`${server}/`)) pids.add(pid);
+  for (const dir of dirs) {
+    for (const file of matching(join(dir, "run"), (n) => /^\d+$/.test(n))) {
+      const p = running.get(basename(file));
+      let written = Number.NaN;
+      try {
+        written = statSync(file).mtimeMs;
+      } catch {}
+      // ps start times have one-second resolution.
+      const sameProcess = p !== undefined && Number.isFinite(p.started) && p.started <= written + 1000;
+      if (sameProcess && /Claude Helper.*--type=utility|\bnode\b/.test(p.command)) pids.add(basename(file));
+    }
+  }
+  pids.delete(String(process.pid));
+  if (!pids.size) return;
+  const list = [...pids].join(", ");
+  if (!apply) return add({ what: "running extension process", status: "found", note: `pid ${list}` });
   Bun.spawnSync(["/bin/kill", ...pids]);
-  add({ what: "running extension process", status: "removed", note: `stopped pid ${pids.join(", ")}` });
+  add({ what: "running extension process", status: "removed", note: `stopped pid ${list}` });
 }
 
 /** Revokes whoop-mcp's access at WHOOP with the repo's own `logout`, which refreshes an expired token first. */
@@ -280,8 +304,8 @@ async function main() {
     await removeSkills();
     return print();
   }
-  stopExtension();
   const dirs = configDirs();
+  stopExtension(dirs);
   for (const dir of dirs) await revoke(dir);
   keychain();
   for (const dir of dirs) await removePath("whoop-mcp config (login, app credentials, setup leftovers)", dir);

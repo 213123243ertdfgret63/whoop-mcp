@@ -9,6 +9,7 @@ import {
   resolveClientCredentials,
   saveCredentials,
 } from "../src/auth/credentials.ts";
+import { keychain as realKeychain } from "../src/auth/keychain.ts";
 import { ConfigError, DEFAULT_REDIRECT_URI } from "../src/config.ts";
 
 const creds = { clientId: "id-1234", clientSecret: "secret value", redirectUri: "http://localhost:8787/callback" };
@@ -20,9 +21,12 @@ let savedEnv: Record<string, string | undefined>;
 let keychain: Map<string, string>;
 let spies: { mockRestore(): void }[];
 
-function keyOf(opts: { service: string; name: string }) {
-  return `${opts.service}/${opts.name}`;
+function keyOf(item: { service: string; account: string }) {
+  return `${item.service}/${item.account}`;
 }
+
+// The keychain path only runs on macOS; elsewhere the credentials always use the file store.
+const onMac = process.platform === "darwin";
 
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), "whoop-creds-test-"));
@@ -31,14 +35,11 @@ beforeEach(async () => {
   delete process.env.WHOOP_MCP_CREDENTIAL_STORE;
   keychain = new Map();
   spies = [
-    spyOn(Bun.secrets, "get").mockImplementation(
-      (async (opts: { service: string; name: string }) => keychain.get(keyOf(opts)) ?? null) as typeof Bun.secrets.get,
-    ),
-    spyOn(Bun.secrets, "set").mockImplementation((async (opts: { service: string; name: string; value: string }) => {
-      keychain.set(keyOf(opts), opts.value);
-    }) as typeof Bun.secrets.set),
-    spyOn(Bun.secrets, "delete").mockImplementation((async (opts: { service: string; name: string }) =>
-      keychain.delete(keyOf(opts))) as typeof Bun.secrets.delete),
+    spyOn(realKeychain, "get").mockImplementation(async (item) => keychain.get(keyOf(item)) ?? null),
+    spyOn(realKeychain, "set").mockImplementation(async (item, value) => {
+      keychain.set(keyOf(item), value);
+    }),
+    spyOn(realKeychain, "delete").mockImplementation(async (item) => keychain.delete(keyOf(item))),
   ];
 });
 
@@ -51,20 +52,24 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
+const fail = (message: string) => async () => {
+  throw new Error(message);
+};
 const breakKeychain = () => {
   for (const method of ["get", "set", "delete"] as const) {
-    (Bun.secrets[method] as unknown as { mockImplementation(f: () => never): void }).mockImplementation(() => {
-      throw new Error("no secret service");
-    });
+    (realKeychain[method] as unknown as { mockImplementation(f: () => Promise<never>): void }).mockImplementation(
+      fail("keychain locked"),
+    );
   }
 };
+const fileExists = () => Bun.file(credentialFilePath()).exists();
 
-describe("keychain store", () => {
+describe.if(onMac)("keychain store (macOS)", () => {
   test("saves to the keychain and reads back from it, leaving no plaintext file", async () => {
     expect(await saveCredentials(creds)).toBe("keychain");
     // Proves the spy intercepted the write (the real keychain must stay untouched).
     expect(JSON.parse(keychain.get("whoop-mcp/client-credentials") ?? "{}")).toEqual(creds);
-    expect(await Bun.file(credentialFilePath()).exists()).toBe(false);
+    expect(await fileExists()).toBe(false);
     expect(await readStoredCredentials()).toEqual({ creds, source: "keychain" });
   });
 
@@ -73,7 +78,7 @@ describe("keychain store", () => {
     await saveCredentials({ ...creds, clientId: "old" });
     delete process.env.WHOOP_MCP_CREDENTIAL_STORE;
     await saveCredentials(creds);
-    expect(await Bun.file(credentialFilePath()).exists()).toBe(false);
+    expect(await fileExists()).toBe(false);
   });
 
   test("falls back to the 0600 file when the keychain is unavailable", async () => {
@@ -85,14 +90,10 @@ describe("keychain store", () => {
 
   test("a failed keychain write removes the old keychain entry, so the new file credentials win", async () => {
     await saveCredentials({ ...creds, clientId: "old-app" });
-    const set = spyOn(Bun.secrets, "set").mockImplementation(async () => {
-      throw new Error("denied");
-    });
-    try {
-      expect(await saveCredentials({ ...creds, clientId: "new-app" })).toBe("file");
-    } finally {
-      set.mockRestore();
-    }
+    (realKeychain.set as unknown as { mockImplementation(f: () => Promise<never>): void }).mockImplementation(
+      fail("denied"),
+    );
+    expect(await saveCredentials({ ...creds, clientId: "new-app" })).toBe("file");
     expect((await readStoredCredentials())?.creds.clientId).toBe("new-app");
   });
 
@@ -120,9 +121,9 @@ describe("file store (WHOOP_MCP_CREDENTIAL_STORE=file)", () => {
     await saveCredentials(creds);
     await readStoredCredentials();
     await deleteStoredCredentials();
-    expect(Bun.secrets.get).not.toHaveBeenCalled();
-    expect(Bun.secrets.set).not.toHaveBeenCalled();
-    expect(Bun.secrets.delete).not.toHaveBeenCalled();
+    expect(realKeychain.get).not.toHaveBeenCalled();
+    expect(realKeychain.set).not.toHaveBeenCalled();
+    expect(realKeychain.delete).not.toHaveBeenCalled();
   });
 
   test("saves an owner-only file and reads it back", async () => {
@@ -146,33 +147,21 @@ describe("file store (WHOOP_MCP_CREDENTIAL_STORE=file)", () => {
   });
 });
 
-describe("deleteStoredCredentials", () => {
+describe.if(onMac)("deleteStoredCredentials (macOS)", () => {
   test("reports failed when the keychain holds the credentials but won't delete them", async () => {
     await saveCredentials(creds);
-    const del = spyOn(Bun.secrets, "delete").mockImplementation(async () => {
-      throw new Error("user denied");
-    });
-    try {
-      expect(await deleteStoredCredentials()).toBe("failed");
-    } finally {
-      del.mockRestore();
-    }
+    (realKeychain.delete as unknown as { mockImplementation(f: () => Promise<never>): void }).mockImplementation(
+      fail("user denied"),
+    );
+    expect(await deleteStoredCredentials()).toBe("failed");
   });
 
-  test("on macOS and Windows a failed keychain read still tries the delete", async () => {
+  test("deletes without reading first, so an older build's item never shows macOS's access prompt", async () => {
     keychain.set("whoop-mcp/client-credentials", JSON.stringify(creds));
-    const get = spyOn(Bun.secrets, "get").mockImplementation(async () => {
-      throw new Error("keychain locked");
-    });
-    try {
-      const expected = process.platform === "darwin" || process.platform === "win32" ? "deleted" : "none";
-      expect(await deleteStoredCredentials()).toBe(expected);
-      if (expected === "deleted") expect(keychain.size).toBe(0);
-      // Nothing there after all: a failed read followed by a delete that finds nothing is "none", not "failed".
-      expect(await deleteStoredCredentials()).toBe("none");
-    } finally {
-      get.mockRestore();
-    }
+    expect(await deleteStoredCredentials()).toBe("deleted");
+    expect(realKeychain.get).not.toHaveBeenCalled();
+    expect(keychain.size).toBe(0);
+    expect(await deleteStoredCredentials()).toBe("none");
   });
 
   test("removes credentials from both stores and reports it", async () => {
@@ -180,12 +169,23 @@ describe("deleteStoredCredentials", () => {
     await writeFile(credentialFilePath(), JSON.stringify(creds));
     expect(await deleteStoredCredentials()).toBe("deleted");
     expect(keychain.size).toBe(0);
-    expect(await Bun.file(credentialFilePath()).exists()).toBe(false);
+    expect(await fileExists()).toBe(false);
     expect(await readStoredCredentials()).toBeNull();
   });
 
-  test("reports false when nothing was stored", async () => {
+  test("reports none when nothing was stored", async () => {
     expect(await deleteStoredCredentials()).toBe("none");
+  });
+});
+
+describe("deleteStoredCredentials (file store)", () => {
+  test("deletes the file and reports it, never touching the keychain", async () => {
+    process.env.WHOOP_MCP_CREDENTIAL_STORE = "file";
+    await saveCredentials(creds);
+    expect(await deleteStoredCredentials()).toBe("deleted");
+    expect(await fileExists()).toBe(false);
+    expect(await deleteStoredCredentials()).toBe("none");
+    expect(realKeychain.delete).not.toHaveBeenCalled();
   });
 });
 
@@ -200,7 +200,7 @@ describe("resolveClientCredentials", () => {
   test("a lone WHOOP_CLIENT_ID does not shadow stored credentials", async () => {
     await saveCredentials(creds);
     const resolved = await resolveClientCredentials({ WHOOP_CLIENT_ID: "env-id" });
-    expect(resolved).toEqual({ creds, source: "keychain" });
+    expect(resolved).toEqual({ creds, source: onMac ? "keychain" : "file" });
   });
 
   test("uses stored credentials, honouring a WHOOP_REDIRECT_URI override", async () => {
@@ -214,104 +214,5 @@ describe("resolveClientCredentials", () => {
     const err = await resolveClientCredentials({}).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ConfigError);
     expect((err as Error).message).toContain("whoop_login");
-  });
-});
-
-describe.if(process.platform === "darwin")("keychain items saved by another build (macOS)", () => {
-  // What Bun 1.4 throws for an item another program owns (errSecInvalidOwnerEdit).
-  const ownerError = () => {
-    throw Object.assign(new Error("Invalid attempt to change the owner of this item. (code: -25244)"), {
-      code: "ERR_SECRETS_PLATFORM_ERROR",
-    });
-  };
-  /** Stands in for Apple's `security` tool: records its arguments and exits with `code`. */
-  function fakeSecurity(code: number, onRun = () => {}) {
-    const calls: string[][] = [];
-    const spawn = spyOn(Bun, "spawn").mockImplementation(((cmd: string[]) => {
-      calls.push(cmd);
-      onRun();
-      return { exited: Promise.resolve(code) };
-    }) as unknown as typeof Bun.spawn);
-    return { calls, restore: () => spawn.mockRestore() };
-  }
-
-  test("delete falls back to the security tool when Bun.secrets may not delete the item", async () => {
-    keychain.set("whoop-mcp/client-credentials", JSON.stringify(creds));
-    const del = spyOn(Bun.secrets, "delete").mockImplementation(ownerError);
-    const security = fakeSecurity(0, () => keychain.clear());
-    try {
-      expect(await deleteStoredCredentials()).toBe("deleted");
-      expect(security.calls).toEqual([
-        ["/usr/bin/security", "delete-generic-password", "-s", "whoop-mcp", "-a", "client-credentials"],
-      ]);
-    } finally {
-      security.restore();
-      del.mockRestore();
-    }
-  });
-
-  test("reports failed when the security tool can't delete it either", async () => {
-    keychain.set("whoop-mcp/client-credentials", JSON.stringify(creds));
-    const del = spyOn(Bun.secrets, "delete").mockImplementation(ownerError);
-    const security = fakeSecurity(1);
-    try {
-      expect(await deleteStoredCredentials()).toBe("failed");
-    } finally {
-      security.restore();
-      del.mockRestore();
-    }
-  });
-
-  test("an item the security tool can't find counts as already gone", async () => {
-    const get = spyOn(Bun.secrets, "get").mockImplementation(async () => {
-      throw new Error("keychain locked");
-    });
-    const del = spyOn(Bun.secrets, "delete").mockImplementation(ownerError);
-    const security = fakeSecurity(44);
-    try {
-      expect(await deleteStoredCredentials()).toBe("none");
-    } finally {
-      security.restore();
-      del.mockRestore();
-      get.mockRestore();
-    }
-  });
-
-  test("other keychain errors (denied, locked) don't fall back to the security tool", async () => {
-    keychain.set("whoop-mcp/client-credentials", JSON.stringify(creds));
-    const del = spyOn(Bun.secrets, "delete").mockImplementation(async () => {
-      throw new Error("User canceled the operation. (code: -128)");
-    });
-    const security = fakeSecurity(0);
-    try {
-      expect(await deleteStoredCredentials()).toBe("failed");
-      expect(security.calls).toEqual([]);
-    } finally {
-      security.restore();
-      del.mockRestore();
-    }
-  });
-
-  test("saving over another build's item removes it and saves a fresh one to the keychain", async () => {
-    keychain.set("whoop-mcp/client-credentials", JSON.stringify({ ...creds, clientId: "old-app" }));
-    let owned = false;
-    const set = spyOn(Bun.secrets, "set").mockImplementation((async (opts: { value: string }) => {
-      if (!owned) ownerError();
-      keychain.set("whoop-mcp/client-credentials", opts.value);
-    }) as typeof Bun.secrets.set);
-    const del = spyOn(Bun.secrets, "delete").mockImplementation(ownerError);
-    const security = fakeSecurity(0, () => {
-      keychain.clear();
-      owned = true;
-    });
-    try {
-      expect(await saveCredentials(creds)).toBe("keychain");
-      expect(await readStoredCredentials()).toEqual({ creds, source: "keychain" });
-      expect(await Bun.file(credentialFilePath()).exists()).toBe(false);
-    } finally {
-      security.restore();
-      del.mockRestore();
-      set.mockRestore();
-    }
   });
 });

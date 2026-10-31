@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 
-/** package.json is the single source of truth; `bun run release` bumps it. Inlined into compiled binaries. */
+/** package.json is the single source of truth; `bun run release` bumps it. Inlined into the bundle. */
 export const VERSION: string = pkg.version;
 
 export const WHOOP = {

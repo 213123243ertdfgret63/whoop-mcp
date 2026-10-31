@@ -7,7 +7,7 @@ import { join } from "node:path";
  * 2. Runs lint, typecheck and tests.
  * 3. Bumps package.json and prepends CHANGELOG.md with the commits since the last tag.
  * 4. Commits "Release vX.Y.Z" and creates the annotated tag vX.Y.Z.
- * 5. With --push, pushes both atomically; the tag triggers .github/workflows/release.yml (binaries + GitHub release).
+ * 5. With --push, pushes both atomically; the tag triggers .github/workflows/release.yml (builds the extension and publishes the GitHub release).
  *
  * If anything fails after files were written, the commit/tag are rolled back so a re-run starts clean.
  */
@@ -152,7 +152,7 @@ async function main(): Promise<void> {
           `Fix the cause (e.g. pull new commits: git tag -d ${tag} && git reset --hard origin/main, then release again), or retry: ${pushCommand}`,
       );
     }
-    console.error(`Pushed. The release workflow will publish binaries for ${tag}.`);
+    console.error(`Pushed. The release workflow will build the extension and publish the GitHub release for ${tag}.`);
   } else {
     console.error(`Push when ready:  ${pushCommand}`);
   }

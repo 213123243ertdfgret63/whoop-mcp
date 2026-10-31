@@ -16,9 +16,8 @@ env:
 
 jobs:
   release:
-    # macOS: the Mac binaries must be ad-hoc signed (codesign) to run on Apple Silicon, and the bundles must be
-    # zipped with Unix file modes.
-    runs-on: macos-latest
+    # The extension is one JavaScript file run by Claude Desktop's built-in Node, so nothing needs a Mac to build.
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -31,6 +30,10 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
 
       - run: bun install --frozen-lockfile
 
@@ -55,20 +58,15 @@ jobs:
           bunx biome ci .
           bun run typecheck
           bun test
+          bun run test:node
 
-      - name: Build the Claude Desktop extensions
+      - name: Build the Claude Desktop extension
         run: |
           bun run build:mcpb
-          # Smoke test: the Mac bundle starts through its launcher on this (Apple Silicon) runner.
+          # Smoke test: the bundle starts on Node 24, the Node Claude Desktop runs it on.
           mkdir -p dist/check && unzip -q dist/whoop-mcp-macos.mcpb -d dist/check
-          test "$(/bin/sh dist/check/server/launch.sh --version)" = "${GITHUB_REF_NAME#v}"
-          # The Intel binary too, under Rosetta (launch.sh picks it when uname -m says x86_64).
-          if arch -x86_64 /usr/bin/true 2>/dev/null; then
-            test "$(arch -x86_64 /bin/sh dist/check/server/launch.sh --version)" = "${GITHUB_REF_NAME#v}"
-          else
-            echo "::warning::Rosetta isn't installed on this runner; the x64 binary was not run"
-          fi
-          (cd dist && shasum -a 256 whoop-mcp-*.mcpb > SHA256SUMS)
+          test "$(node dist/check/server/index.mjs --version)" = "${GITHUB_REF_NAME#v}"
+          (cd dist && sha256sum whoop-mcp-*.mcpb > SHA256SUMS)
 
       - name: Release notes from CHANGELOG.md
         run: |

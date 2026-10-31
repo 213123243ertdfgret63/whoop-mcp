@@ -7,13 +7,14 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "test": "bun test",
+    "test:node": "node --test test/node/",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "format": "biome check --write .",
     "spec:update": "bun run scripts/update-spec.ts",
     "gen:types": "bunx openapi-typescript@7.13.0 openapi/whoop.yaml -o src/whoop/openapi.d.ts",
     "inspect": "bunx @modelcontextprotocol/inspector bun run src/index.ts",
-    "build": "bun build src/index.ts --compile --minify --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile dist/whoop-mcp",
+    "build": "bun build src/index.ts --target=node --format=esm --outfile dist/whoop-mcp.mjs",
     "release": "bun run scripts/release.ts",
     "prepare": "husky && bun run gen:types",
     "build:mcpb": "bun run scripts/build-mcpb.ts"

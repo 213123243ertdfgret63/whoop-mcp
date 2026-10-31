@@ -1,6 +1,7 @@
 import { openUrl } from "../cli/terminal.ts";
 import { type ClientCredentials, missingScopes } from "../config.ts";
 import { log } from "../log.ts";
+import { type Handler, hasIpv6Loopback, type LocalServer, serveLocal } from "./http.ts";
 import {
   buildAuthorizeUrl,
   exchangeCode,
@@ -9,7 +10,7 @@ import {
   revokeAccess,
   type TokenResponse,
 } from "./oauth.ts";
-import { cspFor, htmlPage, newNonce } from "./page-style.ts";
+import { cspFor, escapeHtml, htmlPage, newNonce } from "./page-style.ts";
 
 export interface LoginOptions {
   openBrowser?: boolean;
@@ -40,7 +41,7 @@ export const PAGE_HEADERS = {
 /** A simple styled message page. `body` can carry attacker-controlled query params (error_description), so
  * everything is escaped. */
 export function page(title: string, body: string, status = 200, tone: "ok" | "err" | "info" = "info"): Response {
-  const esc = Bun.escapeHTML;
+  const esc = escapeHtml;
   const nonce = newNonce();
   const cls = tone === "info" ? "" : ` class="${tone}"`;
   const mark = tone === "ok" ? "✓ " : "";
@@ -116,35 +117,21 @@ export class PortInUseError extends Error {
   override name = "PortInUseError";
 }
 
-/** Whether this machine has an IPv6 loopback at all (if not, "localhost" can only mean 127.0.0.1). */
-function hasIpv6Loopback(): boolean {
-  try {
-    Bun.serve({ hostname: "::1", port: 0, fetch: () => new Response() }).stop(true);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Binds a server on the redirect URI's loopback address(es). For "localhost" it must get both 127.0.0.1 and
  * ::1 (when IPv6 exists): the browser may resolve either, and a half-bound port would let whatever program
  * holds the other address receive the setup link or the OAuth callback.
  */
-export function listenLocal(
-  redirect: URL,
-  fetch: (req: Request) => Response | Promise<Response>,
-  opts: { maxRequestBodySize?: number } = {},
-) {
+export async function listenLocal(redirect: URL, fetch: Handler, opts: { maxRequestBodySize?: number } = {}) {
   const port = Number(redirect.port || 80);
   const hosts =
     redirect.hostname === "localhost"
-      ? ["127.0.0.1", ...(hasIpv6Loopback() ? ["::1"] : [])]
+      ? ["127.0.0.1", ...((await hasIpv6Loopback()) ? ["::1"] : [])]
       : [redirect.hostname.replace(/^\[|\]$/g, "")];
-  const servers: ReturnType<typeof Bun.serve>[] = [];
+  const servers: LocalServer[] = [];
   for (const hostname of hosts) {
     try {
-      servers.push(Bun.serve({ hostname, port, fetch, maxRequestBodySize: opts.maxRequestBodySize }));
+      servers.push(await serveLocal({ hostname, port, fetch, maxRequestBodySize: opts.maxRequestBodySize }));
     } catch (err) {
       for (const s of servers) s.stop(true);
       log.warn("could not listen for the login callback", { host: hostname, port, error: (err as Error).message });
@@ -158,7 +145,7 @@ export function listenLocal(
     port,
     // Graceful stop, so the response for the request that settled the flow still gets flushed.
     stop: () => {
-      for (const s of servers) void s.stop();
+      for (const s of servers) s.stop();
     },
   };
 }
@@ -209,7 +196,7 @@ export async function login(creds: ClientCredentials, opts: LoginOptions = {}): 
   const revoke = opts.revoke ?? revokeAccess;
 
   const callback = oauthCallback(state);
-  const server = listenLocal(redirect, (req) => {
+  const server = await listenLocal(redirect, (req) => {
     const url = new URL(req.url);
     return url.pathname === redirect.pathname ? callback.handle(url) : new Response("Not found", { status: 404 });
   });

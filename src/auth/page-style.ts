@@ -35,6 +35,13 @@ export function htmlPage(opts: { title: string; body: string; css?: string; scri
 }
 
 /** A fresh nonce for one response's CSP. */
+const HTML_ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#x27;" };
+
+/** Escapes text for HTML content and quoted attributes (the same characters Bun.escapeHTML did). */
+export function escapeHtml(text: unknown): string {
+  return String(text).replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] ?? c);
+}
+
 export function newNonce(): string {
   return Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64");
 }

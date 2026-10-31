@@ -21,7 +21,7 @@ import {
   revokeAccess,
   type TokenResponse,
 } from "./oauth.ts";
-import { cspFor, htmlPage, newNonce } from "./page-style.ts";
+import { cspFor, escapeHtml, htmlPage, newNonce } from "./page-style.ts";
 
 /**
  * First-run setup entirely in the browser, so connecting WHOOP never needs a terminal: a local page explains
@@ -136,7 +136,7 @@ function setupPage(opts: {
   keptSecretTail?: string;
   problem?: string;
 }): Response {
-  const esc = Bun.escapeHTML;
+  const esc = escapeHtml;
   const nonce = newNonce();
   const scopes = SCOPES.filter((s) => s !== "offline");
   const copyRow = (label: string, value: string, note = "") =>
@@ -428,12 +428,12 @@ else if (id.value) setStep(2);
 /** Where WHOOP sends the browser after approval: follows the token exchange instead of claiming success early. */
 function finishingPage(token: string): Response {
   const nonce = newNonce();
-  const esc = Bun.escapeHTML;
+  const esc = escapeHtml;
   const body = `<h1 id="title">Finishing…</h1>
 <p id="text">WHOOP approved access. Connecting…</p>
 <div id="retry" class="actions" hidden><a class="button" href="${SETUP_PATH}/authorize?t=${esc(token)}">Try again</a>
 <a class="button quiet" href="${SETUP_PATH}?t=${esc(token)}">Back to setup</a></div>
-<noscript><p><a href="${SETUP_PATH}/done?t=${Bun.escapeHTML(token)}">Check whether it worked</a></p></noscript>`;
+<noscript><p><a href="${SETUP_PATH}/done?t=${escapeHtml(token)}">Check whether it worked</a></p></noscript>`;
   const script = `
 "use strict";
 const token = ${scriptJson(token)};
@@ -471,7 +471,7 @@ const token = ${scriptJson(token)};
 
 /** The callback after WHOOP refused (bad redirect URL, unknown client, denied): fix and retry from here. */
 function callbackProblemPage(token: string, problem: string): Response {
-  const esc = Bun.escapeHTML;
+  const esc = escapeHtml;
   const nonce = newNonce();
   const body = `<h1 class="err">WHOOP didn't connect</h1>
 <p>${esc(problem)}</p>
@@ -831,7 +831,7 @@ export async function browserSetup(opts: BrowserSetupOptions): Promise<BrowserSe
     return pageNow({ error: { field: outcome.field, message: outcome.message } });
   };
 
-  const server = listenLocal(
+  const server = await listenLocal(
     redirect,
     (req) =>
       handle(req).catch((err: unknown) => {

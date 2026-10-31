@@ -54,7 +54,7 @@ Once it's connected, you talk to Claude normally and it fetches whatever WHOOP d
 
 ## Install
 
-Claude Desktop on macOS 13 or later (Apple Silicon or Intel). Only macOS is supported.
+Claude Desktop on macOS (Apple Silicon or Intel). Only macOS is supported. Nothing else to install: Desktop runs the extension on its own built-in Node.js.
 
 1. Download **`whoop-mcp-macos.mcpb`** from the [latest release](https://github.com/213123243ertdfgret63/whoop-mcp/releases/latest).
 2. Double-click it. Claude Desktop opens an install dialog listing the tools; click **Install**.
@@ -105,7 +105,7 @@ Later, when the login expires, the page goes straight to WHOOP's approval screen
 
 Download the new `.mcpb` from the [latest release](https://github.com/213123243ertdfgret63/whoop-mcp/releases/latest) and install it the same way. Claude Desktop replaces the old version; your WHOOP login and app credentials are kept, because they live outside the extension. Extensions installed from a file don't update themselves.
 
-The first time a new version reads the saved credentials, macOS may ask you to allow keychain access.
+Coming from v0.7 or earlier: the first time the new version reads the saved app credentials, macOS asks whether `security` may use the `whoop-mcp` keychain item. Click **Always Allow**. (Versions before v0.8 saved the item with their own program, which macOS treats as a different app; from v0.8 the item is saved through Apple's `security` tool, so updates no longer ask.)
 
 To see which version you have, look for **WHOOP (unofficial)** under **Settings → Extensions**, or ask Claude for `whoop_status` (`server_version`). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
@@ -207,29 +207,29 @@ From a clean `main` that's in sync with `origin`, this does the following:
 
 `--push` pushes `main` and the tag together, so either both land or neither does.
 
-Pushing the tag runs `.github/workflows/release.yml` on a macOS runner. It checks that the tag matches `package.json` and is on `main`, reruns the checks, and builds the extension bundle with `bun run build:mcpb`. It then checks that the bundle starts, and publishes a GitHub release with the bundle, checksums and the changelog notes.
+Pushing the tag runs `.github/workflows/release.yml` on an Ubuntu runner. It checks that the tag matches `package.json` and is on `main`, reruns the checks, and builds the extension bundle with `bun run build:mcpb`. It then checks that the bundle starts on Node 24, and publishes a GitHub release with the bundle, checksums and the changelog notes.
 
 ### How the bundles are built
 
-`scripts/build-mcpb.ts` compiles the server with `bun build --compile` and packs it with the pinned `@anthropic-ai/mcpb` CLI:
+`scripts/build-mcpb.ts` bundles the server into one JavaScript file with `bun build --target=node` and packs it with the pinned `@anthropic-ai/mcpb` CLI:
 
-- One macOS bundle with both the arm64 and x64 binaries (ad-hoc signed) and `server/launch.sh`, which picks the right one. MCP bundles have no CPU-architecture field ([mcpb#10](https://github.com/modelcontextprotocol/mcpb/issues/10)). The launcher also restores the execute bit, which some Desktop builds drop when unpacking ([mcpb#294](https://github.com/modelcontextprotocol/mcpb/issues/294)).
+- The bundle is `manifest.json`, `icon.png` and `server/index.mjs` (about 1 MB unpacked). The manifest's server type is `node`, run as `node ${__dirname}/server/index.mjs`, and `compatibility.runtimes.node` is `>=22.0.0`. Claude Desktop then runs it on its built-in Node.js (24.22 in Desktop 4.4212, as an Electron utility process), so users need no Node of their own. If **Use built-in Node.js for MCP** is turned off, Desktop uses a matching Node on the system.
 - The tool list in the manifest comes from the server itself, so the install dialog can't drift from the code.
-- The bundle must be packed on macOS or Linux, so the zip keeps Unix file modes. The build fails if an executable isn't stored as executable.
+- There are no binaries, so nothing is code-signed or per-CPU, and it builds on any OS.
 - They're not signed: `mcpb sign` 2.1.2 makes bundles Claude Desktop refuses to install ([mcpb#278](https://github.com/modelcontextprotocol/mcpb/issues/278)).
 
 ## Development
 
-| Command                                 | What it does                                                                                                        |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `bun test`                              | Test suite, including stdio smoke tests for both MCP protocol versions                                              |
-| `bun run typecheck`                     | `tsc --noEmit`                                                                                                      |
-| `bun run lint` / `bun run format`       | Runs Biome's checks / runs them and applies fixes                                                                   |
-| `bun run inspect`                       | Opens MCP Inspector against the server                                                                              |
-| `bun run spec:update`                   | Refreshes `openapi/whoop.yaml` from WHOOP's published spec (review with `git diff openapi/`)                        |
-| `bun run gen:types`                     | Generates `src/whoop/openapi.d.ts` from `openapi/whoop.yaml`; runs automatically on `bun install`                   |
-| `bun run release <patch\|minor\|major>` | Cuts a release (see [Cutting a release](#cutting-a-release))                                                        |
-| `bun run build`                         | Builds a single-file binary for this machine at `dist/whoop-mcp`                                                    |
-| `bun run build:mcpb`                    | Builds the Claude Desktop extension bundle in `dist/` (see [How the bundles are built](#how-the-bundles-are-built)) |
-- **CI** (`.github/workflows/ci.yml`) runs lint, typecheck, tests, a compiled-binary smoke test and the bundle build on Ubuntu for every push to `main` and every pull request. Trigger it manually to include macOS. The Bun version comes from `.bun-version`.
+| Command                                 | What it does                                                                                                               |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `bun test` / `bun run test:node`        | Test suite (stdio smoke tests for both MCP protocol versions, on Bun and on the Node bundle) / the loopback server on Node |
+| `bun run typecheck`                     | `tsc --noEmit`                                                                                                             |
+| `bun run lint` / `bun run format`       | Runs Biome's checks / runs them and applies fixes                                                                          |
+| `bun run inspect`                       | Opens MCP Inspector against the server                                                                                     |
+| `bun run spec:update`                   | Refreshes `openapi/whoop.yaml` from WHOOP's published spec (review with `git diff openapi/`)                               |
+| `bun run gen:types`                     | Generates `src/whoop/openapi.d.ts` from `openapi/whoop.yaml`; runs automatically on `bun install`                          |
+| `bun run release <patch\|minor\|major>` | Cuts a release (see [Cutting a release](#cutting-a-release))                                                               |
+| `bun run build`                         | Bundles the server for Node at `dist/whoop-mcp.mjs` (`node dist/whoop-mcp.mjs status`)                                     |
+| `bun run build:mcpb`                    | Builds the Claude Desktop extension bundle in `dist/` (see [How the bundles are built](#how-the-bundles-are-built))        |
+- **CI** (`.github/workflows/ci.yml`) runs lint, typecheck, the tests (on Bun, plus `bun run test:node` for the loopback server on Node 24), and the extension build, whose bundle it then starts on Node 24, on Ubuntu for every push to `main` and every pull request. Trigger it manually to include macOS. The Bun version comes from `.bun-version`.
 - **Pre-commit hook:** a Husky hook runs Biome on staged files and applies formatting and safe fixes. Lint errors it can't fix block the commit.

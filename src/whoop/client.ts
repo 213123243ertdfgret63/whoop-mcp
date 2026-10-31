@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { resolveClientCredentials } from "../auth/credentials.ts";
 import { OAuthHttpError, refreshTokens, revokeAccess, toStored } from "../auth/oauth.ts";
 import { readTokens, type StoredTokens, withTokenLock, writeTokens } from "../auth/store.ts";
@@ -101,7 +102,7 @@ export class WhoopClient {
     }
     for (let attempt = 0; res.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES; attempt++) {
       log.warn("whoop rate limit, waiting", { path, wait_ms: retryDelayMs(res), attempt: attempt + 1 });
-      await Bun.sleep(retryDelayMs(res));
+      await sleep(retryDelayMs(res));
       res = await this.send(url, tokens.access_token);
     }
     const text = await res.text();

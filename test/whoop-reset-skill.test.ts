@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { skills } from "../src/skills.ts";
@@ -104,7 +104,10 @@ async function run(args: string[], { desktopRunning = false, env = {} as Record<
   if (!json) return { code, text: out, report: { applied: false, items: [] } };
   return {
     code,
-    report: JSON.parse(out) as { applied: boolean; items: { what: string; path?: string; status: string }[] },
+    report: JSON.parse(out) as {
+      applied: boolean;
+      items: { what: string; path?: string; status: string; note?: string }[];
+    },
   };
 }
 
@@ -183,6 +186,39 @@ describe("whoop-reset skill", () => {
     expect((await run([], { json: false })).text).toContain("already clean");
     // Desktop's list stays owner-only after the rewrite.
     expect((await stat(join(support(), "extensions-installations.json"))).mode & 0o777).toBe(0o600);
+  });
+
+  test.skipIf(!Bun.which("node"))("stops the server its pid file names, and never a reused pid", async () => {
+    await seed();
+    // A server on Node (as under Desktop's built-in Node, where only the pid file tells it apart)...
+    const server = Bun.spawn([Bun.which("node")!, "-e", "setInterval(() => {}, 1000)"], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    // ...and an unrelated program that now has the pid a stale file names.
+    const other = Bun.spawn(["/bin/sleep", "30"], { stdio: ["ignore", "ignore", "ignore"] });
+    const cleanup: { kill(): void }[] = [];
+    try {
+      await put(join(home, ".config", "whoop-mcp", "run", String(server.pid)), "/x/server/index.mjs\n");
+      await put(join(home, ".config", "whoop-mcp", "run", String(other.pid)), "/x/server/index.mjs\n");
+      // A file older than the process it names was left by a server killed outright: that pid was reused.
+      const reused = Bun.spawn([Bun.which("node")!, "-e", "setInterval(() => {}, 1000)"], {
+        stdio: ["ignore", "ignore", "ignore"],
+      });
+      const stale = join(home, ".config", "whoop-mcp", "run", String(reused.pid));
+      await put(stale, "/x/server/index.mjs\n");
+      await utimes(stale, new Date(Date.now() - 3_600_000), new Date(Date.now() - 3_600_000));
+      cleanup.push(reused);
+      const dry = await dryRunInsideHome();
+      expect(dry.items.find((i) => i.what === "running extension process")?.note).toBe(`pid ${server.pid}`);
+      await run(["--yes"]);
+      expect(await server.exited).not.toBe(0);
+      expect(other.exitCode).toBeNull();
+      expect(reused.exitCode).toBeNull();
+    } finally {
+      server.kill();
+      other.kill();
+      for (const p of cleanup) p.kill();
+    }
   });
 
   test("--include-downloads also deletes the downloaded installers", async () => {
