@@ -165,6 +165,8 @@ Dates are your local dates, and a WHOOP day runs from sleep to sleep, not midnig
 
 ## Run from source
 
+Everything the project does, in enough detail to rebuild it, is in [docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md).
+
 ```bash
 git clone https://github.com/213123243ertdfgret63/whoop-mcp.git && cd whoop-mcp
 bun install            # Bun 1.4+; also generates the API types

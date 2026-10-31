@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!!**/dist", "!src/whoop/openapi.d.ts", "!**/SKILL.md"]
+    "includes": ["**", "!!**/dist", "!src/whoop/openapi.d.ts", "!**/SKILL.md", "!docs/FUNCTIONALITY.md"]
   },
   "formatter": {
     "enabled": true,
